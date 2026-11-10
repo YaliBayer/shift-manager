@@ -165,7 +165,7 @@ export function visibleOccurrences(week: string, shifts: ShiftTemplate[], assign
   const previousWeek = new Date((start - 7 * DAY) * 60000).toISOString().slice(0, 10)
   return [
     ...weekOccurrences(previousWeek, shifts).filter(
-      (occurrence) => occurrence.end > start && assignments[previousWeek]?.[occurrence.key] !== undefined,
+      (occurrence) => occurrence.shift.grouping && occurrence.end > start && assignments[previousWeek]?.[occurrence.key] !== undefined,
     ),
     ...weekOccurrences(week, shifts),
   ]
@@ -174,6 +174,12 @@ export function visibleOccurrences(week: string, shifts: ShiftTemplate[], assign
 export function occursOnDay(occurrence: ShiftOccurrence, week: string, day: DayIndex) {
   const start = weekMinutes(week) + day * DAY
   return occurrence.start < start + DAY && start < occurrence.end
+}
+
+export function isVisibleOnDay(occurrence: ShiftOccurrence, week: string, day: DayIndex) {
+  return occurrence.shift.grouping
+    ? occursOnDay(occurrence, week, day)
+    : occurrence.week === week && occurrence.day === day
 }
 
 function restEndsAt(occurrence: ShiftOccurrence) {

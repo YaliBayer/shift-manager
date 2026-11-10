@@ -5,6 +5,7 @@ import {
   coveredDays,
   createOccurrence,
   generateWeek,
+  isVisibleOnDay,
   occursOnDay,
   protectExistingAssignments,
   protectedAssignmentProblems,
@@ -49,7 +50,7 @@ test('Thursday through Sunday is one 63-hour occurrence, with shared continuatio
   assert.equal(occurrence.end - occurrence.start, 63 * 60)
   assert.deepEqual(coveredDays(occurrence), [4, 5, 6, 0])
   assert.deepEqual(
-    [0, 1, 2, 3, 4, 5, 6].filter((day) => occursOnDay(occurrence, week, day)),
+    [0, 1, 2, 3, 4, 5, 6].filter((day) => isVisibleOnDay(occurrence, week, day)),
     [4, 5, 6],
   )
 
@@ -57,8 +58,8 @@ test('Thursday through Sunday is one 63-hour occurrence, with shared continuatio
   const [continuation] = visibleOccurrences(nextWeek, [weekend], assignments)
   assert.equal(continuation.week, week)
   assert.equal(continuation.key, occurrence.key)
-  assert.equal(occursOnDay(continuation, nextWeek, 0), true)
-  assert.equal(occursOnDay(continuation, nextWeek, 1), false)
+  assert.equal(isVisibleOnDay(continuation, nextWeek, 0), true)
+  assert.equal(isVisibleOnDay(continuation, nextWeek, 1), false)
   assert.equal(visibleOccurrences(nextWeek, [weekend], {}).length, 1)
 })
 
@@ -70,6 +71,36 @@ test('every covered day, including Sunday morning, blocks an unavailable worker'
     assert.deepEqual(generateWeek(week, [unavailableWorker], [weekend], {})[occurrence.key], [])
   }
   assert.equal(assignmentConflict({ ...worker, excludedDays: [1] }, occurrence, [weekend], {}), null)
+})
+
+test('ordinary overnight shifts show only on their starting days without duplicate continuation cards', () => {
+  const night = { ...sunday, id: 'night', start: '17:00', end: '09:00', activeDays: [0, 1] }
+  const assignments = { [week]: { '0:night': [worker.id] } }
+  const displayed = visibleOccurrences(week, [night], assignments)
+  assert.deepEqual(
+    [0, 1, 2].map((day) => displayed.filter((item) => isVisibleOnDay(item, week, day)).map((item) => item.key)),
+    [['0:night'], ['1:night'], []],
+  )
+  const occurrence = createOccurrence(week, 0, night)
+  assert.equal(occursOnDay(occurrence, week, 1), true)
+  assert.equal(assignmentConflict(worker, createOccurrence(week, 1, night), [night], assignments), 'rest-day')
+})
+
+test('the next week hides ordinary overnight carryovers but keeps grouped continuations and their assignments', () => {
+  const night = { ...sunday, id: 'night', start: '17:00', end: '09:00', activeDays: [6] }
+  const assignments = { [week]: { '6:night': [worker.id], '4:weekend': ['other'] } }
+  const snapshot = structuredClone(assignments)
+  const shifts = [night, weekend]
+  const displayed = visibleOccurrences(nextWeek, shifts, assignments)
+  assert.equal(displayed.some((item) => item.week === week && item.key === '6:night'), false)
+  const sundayCards = displayed.filter((item) => isVisibleOnDay(item, nextWeek, 0))
+  assert.equal(sundayCards.length, 1)
+  assert.equal(sundayCards[0].key, '4:weekend')
+  assert.equal(sundayCards[0].week, week)
+  assert.deepEqual(assignments[sundayCards[0].week][sundayCards[0].key], ['other'])
+  const morning = { ...sunday, start: '09:00' }
+  assert.equal(assignmentConflict(worker, createOccurrence(nextWeek, 0, morning), [...shifts, morning], assignments), 'rest-day')
+  assert.deepEqual(assignments, snapshot)
 })
 
 test('manual eligibility blocks overlaps in either week and requires rest after a grouped shift', () => {

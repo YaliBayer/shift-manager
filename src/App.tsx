@@ -4,7 +4,7 @@ import {
   createOccurrence,
   generateWeek,
   isWorkerEligible,
-  occursOnDay,
+  isVisibleOnDay,
   protectExistingAssignments,
   protectedAssignmentProblems,
   removeRestrictedAssignments,
@@ -506,7 +506,7 @@ function App() {
             <section className="schedule-grid">
               {weekDays.map((date, index) => {
                 const day = index as DayIndex
-                const activeOccurrences = displayedOccurrences.filter((occurrence) => occursOnDay(occurrence, weekStart, day))
+                const activeOccurrences = displayedOccurrences.filter((occurrence) => isVisibleOnDay(occurrence, weekStart, day))
                 return (
                   <article className="day-card" key={toDateKey(date)}>
                     <header>
