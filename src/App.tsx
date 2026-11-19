@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   assignmentConflict,
   createOccurrence,
+  coveredDates,
   generateWeek,
   isWorkerEligible,
   isVisibleOnDay,
@@ -15,6 +16,11 @@ import {
   weekOccurrences,
 } from './scheduling'
 import type { AssignmentsByWeek, DayIndex, LockedSlotsByWeek, ShiftOccurrence, ShiftTemplate, Worker } from './scheduling'
+import { BUILTIN_STATUSES, customStatusError, isDailyStatuses, migrateDailyStatuses, updateDailyStatus } from './daily-status'
+import type { DailyStatus, DailyStatuses, StatusDefinition } from './daily-status'
+import { isShiftStatusConfiguration, shiftAppearance } from './shift-status'
+import StatusSettings, { StatusBadge, StatusCreator } from './StatusSettings'
+import WorkerWeekTable from './WorkerWeekTable'
 import './App.css'
 
 type Tab = 'schedule' | 'workers' | 'shifts'
@@ -126,6 +132,10 @@ function App() {
   const [lockedSlots, setLockedSlots] = useState<LockedSlotsByWeek>(
     stored?.lockedSlots ?? protectExistingAssignments(stored?.assignments ?? {}),
   )
+  const [dailyStatuses, setDailyStatuses] = useState<DailyStatuses>(() => migrateDailyStatuses(stored?.dailyStatuses ?? {}))
+  const [customStatuses, setCustomStatuses] = useState<StatusDefinition[]>(stored?.customStatuses ?? [])
+  const [scheduleView, setScheduleView] = useState<'matrix' | 'cards'>('matrix')
+  const weekGesture = useRef({ x: 0, lastMove: 0, wheel: 0 })
   const [weekStart, setWeekStart] = useState(toDateKey(getSunday()))
   const [tab, setTab] = useState<Tab>('schedule')
   const [editingWorker, setEditingWorker] = useState<Worker | null>(null)
@@ -139,8 +149,13 @@ function App() {
   const displayedOccurrences = visibleOccurrences(weekStart, shifts, assignments)
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ workers, shifts, assignments, lockedSlots }))
-  }, [workers, shifts, assignments, lockedSlots])
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ workers, shifts, assignments, lockedSlots, dailyStatuses, customStatuses }))
+    } catch {
+      // eslint-disable-next-line react/set-state-in-effect -- Report a failure while synchronizing browser storage.
+      setError('לא ניתן לשמור בדפדפן. ייצא גיבוי לפני סגירת החלון כדי לא לאבד שינויים.')
+    }
+  }, [workers, shifts, assignments, lockedSlots, dailyStatuses, customStatuses])
 
   useEffect(() => {
     if (!notice && !error) return
@@ -180,9 +195,33 @@ function App() {
     setNotice('פרטי העובד נשמרו')
   }
 
+  function createCustomStatus(status: StatusDefinition) {
+    const message = customStatusError(status, customStatuses)
+    if (message) return message
+    setCustomStatuses((current) => [...current, { ...status, label: status.label.trim() }])
+    setNotice('הסטטוס נוצר וזמין לבחירה')
+    return null
+  }
+
+  function saveDailyStatus(date: string, workerId: string, status: DailyStatus | null) {
+    if (status?.blocksShifts) {
+      const conflicting = Object.keys(assignments).flatMap((week) => weekOccurrences(week, shifts))
+        .filter((item) => assignments[item.week]?.[item.key]?.includes(workerId) && coveredDates(item).includes(date))
+      if (conflicting.length) {
+        return `לא ניתן לחסום את היום כשיש שיבוץ חופף: ${conflicting.map((item) => item.shift.name).join(', ')}. הסר את השיבוץ תחילה; משמרת רצופה תוסר בכל ימיה.`
+      }
+    }
+    setDailyStatuses((current) => updateDailyStatus(current, date, workerId, status))
+    setNotice('התא נשמר')
+    return null
+  }
+
   function removeWorker(workerId: string) {
     if (!window.confirm('למחוק את העובד ואת כל השיבוצים שלו?')) return
     setWorkers((current) => current.filter((worker) => worker.id !== workerId))
+    setDailyStatuses((current) => Object.keys(current).reduce(
+      (updated, date) => updateDailyStatus(updated, date, workerId, null), current,
+    ))
     setShifts((current) => current.map((shift) => shift.eligibleWorkerIds === undefined
       ? shift
       : { ...shift, eligibleWorkerIds: shift.eligibleWorkerIds.filter((id) => id !== workerId) },
@@ -277,23 +316,25 @@ function App() {
   }
 
   function assignWorker(occurrence: ShiftOccurrence, workerId: string) {
-    if (!workerId) return
+    if (!workerId) return null
     const { week, key, shift } = occurrence
     const assigned = assignments[week]?.[key] ?? []
-    if (assigned.includes(workerId)) return
+    if (assigned.includes(workerId)) return null
     if (assigned.length >= shift.requiredWorkers) {
-      setError('המשמרת כבר מלאה. הסר עובד לפני הוספת עובד אחר.')
-      return
+      const message = 'המשמרת כבר מלאה. הסר עובד לפני הוספת עובד אחר.'
+      setError(message)
+      return message
     }
 
     const worker = workers.find((item) => item.id === workerId)
     if (!worker) {
       setError('העובד לא נמצא')
-      return
+      return 'העובד לא נמצא'
     }
-    const conflict = assignmentConflict(worker, occurrence, shifts, assignments)
+    const conflict = assignmentConflict(worker, occurrence, shifts, assignments, dailyStatuses)
     if (conflict) {
       const messages = {
+        'daily-status': 'לעובד יש סטטוס חוסם באחד התאריכים שהמשמרת מכסה. ניתן לערוך אותו בטבלת העובדים.',
         'worker-not-eligible': 'העובד אינו ברשימת העובדים המורשים למשמרת זו',
         'grouped-not-allowed': 'לעובד אין הרשאה למשמרות רצופות על פני מספר ימים',
         'grouped-only': 'העובד מורשה למשמרות שבת רצופות בלבד, ללא משמרות רגילות',
@@ -304,7 +345,7 @@ function App() {
         limit: `${worker.name} כבר הגיע למכסת ${worker.maxShifts} המשמרות בשבוע תחילת המשמרת`,
       }
       setError(messages[conflict])
-      return
+      return messages[conflict]
     }
 
     setAssignments((current) => ({
@@ -315,6 +356,7 @@ function App() {
       },
     }))
     setSlotLock(occurrence, true)
+    return null
   }
 
   function unassignWorker({ week, key }: ShiftOccurrence, workerId: string) {
@@ -334,12 +376,12 @@ function App() {
   function generateSchedule() {
     setError('')
     setNotice('')
-    const problems = protectedAssignmentProblems(weekStart, workers, shifts, assignments, lockedSlots)
+    const problems = protectedAssignmentProblems(weekStart, workers, shifts, assignments, lockedSlots, dailyStatuses)
     if (problems.length) {
-      setError('לא ניתן ליצור סידור: יש משמרות מוגנות שסותרות זמינות, הרשאות, מכסה, חפיפות או מנוחה אחרי משמרת. תקן אותן או שחרר את הנעילה. השיבוצים לא שונו.')
+      setError('לא ניתן ליצור סידור: יש משמרות מוגנות שסותרות זמינות, סטטוס יומי חוסם, הרשאות, מכסה, חפיפות או מנוחה. תקן אותן או שחרר את הנעילה. השיבוצים לא שונו.')
       return
     }
-    const generated = generateWeek(weekStart, workers, shifts, assignments, lockedSlots)
+    const generated = generateWeek(weekStart, workers, shifts, assignments, lockedSlots, dailyStatuses)
     setAssignments((current) => ({ ...current, [weekStart]: generated }))
     const missing = shifts.reduce((total, shift) => {
       return (
@@ -355,7 +397,7 @@ function App() {
   }
 
   function clearWeek() {
-    if (!window.confirm('למחוק את כל השיבוצים והנעילות שמתחילים השבוע, כולל ידניים? שינוי שבוע עבר משפיע על ההיסטוריה ותור שבת. המשכים מהשבוע הקודם יישארו ללא שינוי.')) return
+    if (!window.confirm('למחוק את כל השיבוצים והנעילות שמתחילים השבוע, כולל ידניים? שינוי שבוע עבר משפיע על ההיסטוריה ותור שבת. סטטוסים יומיים והמשכים מהשבוע הקודם יישארו ללא שינוי.')) return
     setAssignments((current) => ({ ...current, [weekStart]: {} }))
     setLockedSlots((current) => ({ ...current, [weekStart]: [] }))
   }
@@ -366,7 +408,7 @@ function App() {
   }
 
   function exportData() {
-    const blob = new Blob([JSON.stringify({ workers, shifts, assignments, lockedSlots }, null, 2)], {
+    const blob = new Blob([JSON.stringify({ workers, shifts, assignments, lockedSlots, dailyStatuses, customStatuses }, null, 2)], {
       type: 'application/json',
     })
     const url = URL.createObjectURL(blob)
@@ -393,15 +435,20 @@ function App() {
           !data.lockedSlots || typeof data.lockedSlots !== 'object' || Array.isArray(data.lockedSlots) ||
           !Object.values(data.lockedSlots).every((keys) => Array.isArray(keys) && keys.every((key) => typeof key === 'string'))
         )) throw new Error('Invalid locked slots')
+        if (data.dailyStatuses !== undefined && !isDailyStatuses(data.dailyStatuses)) throw new Error('Invalid daily statuses')
+        if (!isShiftStatusConfiguration(data.shifts, data.customStatuses)) throw new Error('Invalid shift statuses')
         setWorkers(data.workers)
         setShifts(data.shifts)
         setAssignments(data.assignments)
         setLockedSlots(data.lockedSlots ?? protectExistingAssignments(data.assignments))
+        setDailyStatuses(migrateDailyStatuses(data.dailyStatuses ?? {}))
+        setCustomStatuses(data.customStatuses ?? [])
         setNotice('הנתונים יובאו בהצלחה')
       } catch {
         setError('הקובץ אינו קובץ גיבוי תקין')
       }
     }
+    reader.onerror = () => setError('לא ניתן לקרוא את קובץ הגיבוי')
     reader.readAsText(file)
   }
 
@@ -414,7 +461,7 @@ function App() {
   )
 
   return (
-    <div className="app-shell" dir="rtl">
+    <div className={`app-shell ${tab === 'schedule' && scheduleView === 'matrix' ? 'matrix-page' : ''}`} dir="rtl">
       <header className="topbar">
         <div className="brand">
           <div className="brand-mark">ש</div>
@@ -485,16 +532,37 @@ function App() {
               </article>
             </section>
 
-            <section className="week-controls card">
+            <section className="week-controls card"
+              onWheel={(event) => {
+                if (Math.abs(event.deltaX) <= Math.abs(event.deltaY)) return
+                weekGesture.current.wheel += event.deltaX
+                if (Math.abs(weekGesture.current.wheel) > 90 && Date.now() - weekGesture.current.lastMove > 500) {
+                  moveWeek(weekGesture.current.wheel > 0 ? 1 : -1)
+                  weekGesture.current = { ...weekGesture.current, wheel: 0, lastMove: Date.now() }
+                }
+              }}
+              onTouchStart={(event) => { weekGesture.current.x = event.touches[0].clientX }}
+              onTouchEnd={(event) => {
+                const delta = weekGesture.current.x - event.changedTouches[0].clientX
+                if (Math.abs(delta) > 70) moveWeek(delta > 0 ? 1 : -1)
+              }}
+            >
               <button className="icon-button" onClick={() => moveWeek(1)} aria-label="השבוע הבא">‹</button>
               <div>
                 <span>שבוע שמתחיל ביום ראשון</span>
                 <strong>{formatFullDate(weekDays[0])} — {formatDate(weekDays[6])}</strong>
+                <small className="week-hint">חצים או החלקה אופקית כאן למעבר בין שבועות</small>
               </div>
               <input type="date" value={weekStart} onChange={(event) => updateWeekDate(event.target.value)} />
               <button className="icon-button" onClick={() => moveWeek(-1)} aria-label="השבוע הקודם">›</button>
+              <button className="button secondary" onClick={() => setWeekStart(toDateKey(getSunday()))}>השבוע הנוכחי</button>
             </section>
 
+            <div className="view-toggle" aria-label="תצוגת לוח">
+              <button className={`button secondary ${scheduleView === 'matrix' ? 'selected' : ''}`} aria-pressed={scheduleView === 'matrix'} onClick={() => setScheduleView('matrix')}>טבלת עובדים</button>
+              <button className={`button secondary ${scheduleView === 'cards' ? 'selected' : ''}`} aria-pressed={scheduleView === 'cards'} onClick={() => setScheduleView('cards')}>כרטיסי משמרות</button>
+            </div>
+            <details className="schedule-rules"><summary>כללי שיבוץ ומנוחה</summary>
             <p className="grouped-help schedule-help">
               האיזון מתחשב במשמרות רגילות בארבעת השבועות הקודמים ובשבוע הנוכחי.
               במשמרות שבת רצופות אין חזרה על עובד לפני השלמת סבב של כל המורשים; כשאין מועמד זמין שנותר בסבב, המקום נשאר פנוי.
@@ -503,7 +571,12 @@ function App() {
               עריכה ידנית נועלת את המשמרת כולה, כולל מקומות ריקים. ניתן לשחרר אותה לאוטומטי בכפתור המשמרת.
               שיבוצים מגרסאות ישנות נשמרים כמוגנים. תור שבת ואיסור לילות אוטומטיים אינם מגבילים שיבוץ ידני; שאר המגבלות נשמרות.
             </p>
-            <section className="schedule-grid">
+            </details>
+            {scheduleView === 'matrix' ? <WorkerWeekTable key={weekStart} week={weekStart} dates={weekDays.map(toDateKey)}
+              workers={workers} shifts={shifts} assignments={assignments} locks={lockedSlots} statuses={dailyStatuses}
+              customStatuses={customStatuses}
+              onSaveStatus={saveDailyStatus} onAssign={assignWorker} onUnassign={unassignWorker} onLock={setSlotLock}
+            /> : <section className="schedule-grid">
               {weekDays.map((date, index) => {
                 const day = index as DayIndex
                 const activeOccurrences = displayedOccurrences.filter((occurrence) => isVisibleOnDay(occurrence, weekStart, day))
@@ -536,6 +609,7 @@ function App() {
                               {!shift.grouping && <time>{shift.start}–{shift.end}</time>}
                             </div>
                             {shift.grouping && <p className="shift-period">{shiftPeriod(shift)}</p>}
+                            <StatusBadge status={shiftAppearance(shift, customStatuses)} />
                             {shift.eligibleWorkerIds !== undefined && <p className="shift-period">עובדים נבחרים בלבד</p>}
                             <button
                               className={`slot-lock ${locked ? 'locked' : ''}`}
@@ -589,7 +663,7 @@ function App() {
                   </article>
                 )
               })}
-            </section>
+            </section>}
           </>
         )}
 
@@ -692,6 +766,7 @@ function App() {
                   <div className="shift-main">
                     <span>שם המשמרת</span>
                     <strong>{shift.name}</strong>
+                    <StatusBadge status={shiftAppearance(shift, customStatuses)} />
                     {!shift.grouping && <span>סיווג: {PERIOD_LABELS[classifyShiftPeriod(shift)]}</span>}
                     <span>{shift.eligibleWorkerIds === undefined
                       ? 'עובדים: ללא הגבלת רשימה'
@@ -711,6 +786,7 @@ function App() {
                 </article>
               ))}
             </section>
+            <StatusSettings customStatuses={customStatuses} onCreate={createCustomStatus} />
           </>
         )}
       </main>
@@ -727,6 +803,8 @@ function App() {
         <ShiftModal
           shift={editingShift}
           workers={workers}
+          customStatuses={customStatuses}
+          onCreateStatus={createCustomStatus}
           onSave={saveShift}
           onClose={() => setEditingShift(null)}
         />
@@ -834,11 +912,15 @@ function WorkerModal({
 function ShiftModal({
   shift,
   workers,
+  customStatuses,
+  onCreateStatus,
   onSave,
   onClose,
 }: {
   shift: ShiftTemplate
   workers: Worker[]
+  customStatuses: StatusDefinition[]
+  onCreateStatus: (status: StatusDefinition) => string | null
   onSave: (shift: ShiftTemplate) => void
   onClose: () => void
 }) {
@@ -913,6 +995,28 @@ function ShiftModal({
           <label><span>שעת התחלה</span><input required type="time" value={draft.start} onChange={(event) => setDraft({ ...draft, start: event.target.value })} /></label>
           <label><span>שעת סיום</span><input required type="time" value={draft.end} onChange={(event) => setDraft({ ...draft, end: event.target.value })} /></label>
           <label className="full-width"><span>מספר עובדים במשמרת</span><input required min="1" max="50" type="number" value={draft.requiredWorkers} onChange={(event) => setDraft({ ...draft, requiredWorkers: Number(event.target.value) })} /></label>
+        </div>
+        <div className="shift-status-picker">
+          <div className="form-grid">
+            <label className="full-width"><span>סטטוס שיוצג בעת שיבוץ</span>
+              <select value={draft.statusId ?? ''} onChange={(event) => setDraft({ ...draft, statusId: event.target.value || undefined })}>
+                <option value="">אוטומטי לפי סוג המשמרת</option>
+                {[...BUILTIN_STATUSES, ...customStatuses].map((status) =>
+                  <option value={status.id} key={status.id}>{status.label}</option>)}
+              </select>
+            </label>
+          </div>
+          <p className="cell-help">תצוגה מקדימה: <StatusBadge status={shiftAppearance(draft, customStatuses)} /></p>
+          <p className="cell-help">השם והצבע יופיעו בשיבוץ ידני ואוטומטי, בכל ימי המשמרת הרצופה וגם בשיבוצים קיימים. בחירה זו אינה משנה סיווג יום/לילה, מנוחה או מגבלות שיבוץ.</p>
+          <details>
+            <summary>+ יצירת סטטוס חדש לבחירה</summary>
+            <StatusCreator onCreate={(status) => {
+              const message = onCreateStatus(status)
+              if (!message) setDraft((current) => ({ ...current, statusId: status.id }))
+              return message
+            }} />
+            <p className="cell-help">סטטוס חדש נשמר ברשימה גם אם מבטלים את עריכת המשמרת.</p>
+          </details>
         </div>
         <fieldset className="eligible-workers">
           <legend>עובדים מורשים למשמרת</legend>

@@ -1,3 +1,5 @@
+import type { DailyStatuses } from './daily-status'
+
 export type DayIndex = 0 | 1 | 2 | 3 | 4 | 5 | 6
 export type ShiftPeriod = 'day' | 'night'
 
@@ -26,6 +28,7 @@ export type ShiftTemplate = {
   grouping?: { startDay: DayIndex; endDay: DayIndex }
   period?: ShiftPeriod
   eligibleWorkerIds?: string[]
+  statusId?: string
 }
 
 export type WeekAssignments = Record<string, string[]>
@@ -160,6 +163,25 @@ export function coveredDays(occurrence: ShiftOccurrence): DayIndex[] {
   return [...days]
 }
 
+export function coveredDates(occurrence: ShiftOccurrence): string[] {
+  const dates: string[] = []
+  for (let minute = Math.floor(occurrence.start / DAY) * DAY; minute < occurrence.end; minute += DAY) {
+    dates.push(new Date(minute * 60000).toISOString().slice(0, 10))
+  }
+  return dates
+}
+
+export function workerRestOnDate(
+  workerId: string, date: string, shifts: ShiftTemplate[], assignments: AssignmentsByWeek,
+): ShiftOccurrence[] {
+  const start = weekMinutes(date)
+  return Object.keys(assignments).flatMap((week) => weekOccurrences(week, shifts)).filter((occurrence) =>
+    assignments[occurrence.week]?.[occurrence.key]?.includes(workerId) &&
+    restEndsAt(occurrence) > occurrence.end &&
+    occurrence.end >= start && occurrence.end < start + DAY,
+  )
+}
+
 export function visibleOccurrences(week: string, shifts: ShiftTemplate[], assignments: AssignmentsByWeek) {
   const start = weekMinutes(week)
   const previousWeek = new Date((start - 7 * DAY) * 60000).toISOString().slice(0, 10)
@@ -194,10 +216,12 @@ export function assignmentConflict(
   target: ShiftOccurrence,
   shifts: ShiftTemplate[],
   assignments: AssignmentsByWeek,
-): 'worker-not-eligible' | 'grouped-not-allowed' | 'grouped-only' | 'night-not-allowed' | 'unavailable' | 'overlap' | 'rest-day' | 'limit' | null {
+  dailyStatuses: DailyStatuses = {},
+): 'daily-status' | 'worker-not-eligible' | 'grouped-not-allowed' | 'grouped-only' | 'night-not-allowed' | 'unavailable' | 'overlap' | 'rest-day' | 'limit' | null {
   const restriction = shiftRestriction(worker, target.shift)
   if (restriction) return restriction
   if (coveredDays(target).some((day) => worker.excludedDays.includes(day))) return 'unavailable'
+  if (coveredDates(target).some((date) => dailyStatuses[date]?.[worker.id]?.blocksShifts)) return 'daily-status'
 
   for (const [week, assigned] of Object.entries(assignments)) {
     for (const other of weekOccurrences(week, shifts)) {
@@ -223,6 +247,7 @@ export function protectedAssignmentProblems(
   shifts: ShiftTemplate[],
   assignments: AssignmentsByWeek,
   locks: LockedSlotsByWeek,
+  dailyStatuses: DailyStatuses = {},
 ): string[] {
   const protectedSlots = protectedWeek(week, assignments, locks)
   const schedule = { ...assignments, [week]: protectedSlots }
@@ -232,7 +257,7 @@ export function protectedAssignmentProblems(
     if (!occurrence || ids.length > occurrence.shift.requiredWorkers || new Set(ids).size !== ids.length) return true
     return ids.some((id) => {
       const worker = workers.find((item) => item.id === id)
-      return !worker || assignmentConflict(worker, occurrence, shifts, schedule) !== null
+      return !worker || assignmentConflict(worker, occurrence, shifts, schedule, dailyStatuses) !== null
     })
   }).map(([key]) => key)
 }
@@ -286,8 +311,9 @@ export function generateWeek(
   shifts: ShiftTemplate[],
   assignments: AssignmentsByWeek,
   locks: LockedSlotsByWeek = {},
+  dailyStatuses: DailyStatuses = {},
 ) {
-  const problems = protectedAssignmentProblems(week, workers, shifts, assignments, locks)
+  const problems = protectedAssignmentProblems(week, workers, shifts, assignments, locks, dailyStatuses)
   if (problems.length) throw new Error(`Invalid protected assignments: ${problems.join(', ')}`)
   const generated = protectedWeek(week, assignments, locks)
   const schedule = { ...assignments, [week]: generated }
@@ -322,7 +348,7 @@ export function generateWeek(
         .filter((worker) => !generated[occurrence.key].includes(worker.id))
         .filter((worker) => !rotation || rotation.waiting.has(worker.id))
         .filter((worker) => occurrence.shift.grouping || !worker.manualNightOnly || shiftPeriod(occurrence.shift) !== 'night')
-        .filter((worker) => assignmentConflict(worker, occurrence, shifts, schedule) === null)
+        .filter((worker) => assignmentConflict(worker, occurrence, shifts, schedule, dailyStatuses) === null)
         .sort((a, b) => {
           const preferredA = days.some((day) => a.preferredDays.includes(day)) ? 0 : 1
           const preferredB = days.some((day) => b.preferredDays.includes(day)) ? 0 : 1
