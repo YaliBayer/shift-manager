@@ -3,6 +3,7 @@ export type DailyStatus = {
   color: string
   blocksShifts: boolean
   note: string
+  requestId?: string
 }
 
 export type DailyStatuses = Record<string, Record<string, DailyStatus>>
@@ -84,7 +85,8 @@ function isDailyStatus(status: unknown): status is DailyStatus {
   return isRecord(status) &&
     typeof status.label === 'string' && status.label.trim().length > 0 &&
     typeof status.color === 'string' && /^#[\da-f]{6}$/i.test(status.color) &&
-    typeof status.blocksShifts === 'boolean' && typeof status.note === 'string'
+    typeof status.blocksShifts === 'boolean' && typeof status.note === 'string' &&
+    (status.requestId === undefined || (typeof status.requestId === 'string' && status.requestId.length > 0))
 }
 
 export function isDailyStatuses(value: unknown): value is DailyStatuses {

@@ -36,10 +36,12 @@ test('workspace RPCs enforce identity, roles, invitations, concurrency and appro
       grant execute on function auth.uid(), auth.jwt() to anon, authenticated;
       insert into auth.users values ('${manager}'), ('${employee}'), ('${outsider}');
     `)
-    const migration = await readFile(new URL('../supabase/migrations/202611190001_workspaces.sql', import.meta.url), 'utf8')
-    try { await db.exec(migration) } catch (error) {
-      const line = migration.slice(0, Number(error.position)).split('\n').length
-      throw new Error(`Migration line ${line}: ${error.message}; ${error.where ?? ''}`, { cause: error })
+    for (const name of ['202611190001_workspaces.sql', '202611190002_constraint_privacy.sql']) {
+      const migration = await readFile(new URL(`../supabase/migrations/${name}`, import.meta.url), 'utf8')
+      try { await db.exec(migration) } catch (error) {
+        const line = migration.slice(0, Number(error.position)).split('\n').length
+        throw new Error(`${name} line ${line}: ${error.message}; ${error.where ?? ''}`, { cause: error })
+      }
     }
     async function login(id) {
       await db.exec('reset role')
@@ -49,7 +51,7 @@ test('workspace RPCs enforce identity, roles, invitations, concurrency and appro
       await db.exec('set role authenticated')
     }
     async function scalar(sql, params = []) { return (await db.query(sql, params)).rows[0].result }
-    async function state() { return (await db.query('select * from public.sm_workspaces where id = $1', [workspace])).rows[0] }
+    async function state() { return scalar('select public.sm_get_workspace($1) as result', [workspace]) }
     async function save(data, revision) {
       const current = revision ?? (await state()).revision
       return scalar('select public.sm_save_workspace($1,$2,$3) as result', [workspace, current, data])
@@ -69,7 +71,8 @@ test('workspace RPCs enforce identity, roles, invitations, concurrency and appro
       assert.equal(await scalar('select public.sm_role($1) as result', [workspace]), 'manager')
       await save(initial)
       await login(outsider)
-      assert.equal((await db.query('select * from public.sm_workspaces where id = $1', [workspace])).rows.length, 0)
+      assert.equal((await db.query('select id,name from public.sm_workspaces where id = $1', [workspace])).rows.length, 0)
+      await assert.rejects(() => state(), /MEMBERSHIP_REQUIRED/)
       assert.equal((await db.query('select * from public.sm_members where workspace_id = $1', [workspace])).rows.length, 0)
       await assert.rejects(() => scalar('select public.sm_create_invite($1) as result', [workspace]), /MANAGER_REQUIRED/)
       await assert.rejects(() => scalar('select public.sm_join_workspace($1) as result', ['invented']), /INVALID_INVITE/)
@@ -82,6 +85,8 @@ test('workspace RPCs enforce identity, roles, invitations, concurrency and appro
       assert.equal(await scalar('select public.sm_join_workspace($1) as result', [invitation.token]), workspace)
       assert.equal(await scalar('select public.sm_role($1) as result', [workspace]), 'member')
       assert.deepEqual((await state()).data, initial)
+      await assert.rejects(() => db.query('select data from public.sm_workspaces where id = $1', [workspace]), /permission denied/)
+      await assert.rejects(() => db.query('select to_jsonb(w) from public.sm_workspaces w where id = $1', [workspace]), /permission denied/)
       await assert.rejects(() => save(initial, 1), /MANAGER_REQUIRED/)
       await assert.rejects(() => db.query("update public.sm_workspaces set revision = 99 where id = $1", [workspace]), /permission denied/)
       await assert.rejects(() => db.query("insert into public.sm_requests(workspace_id,user_id,worker_id,request_date,kind,status) values($1,$2,'b','2026-11-16','holiday','approved')", [workspace, employee]), /permission denied/)
@@ -122,6 +127,7 @@ test('workspace RPCs enforce identity, roles, invitations, concurrency and appro
       assert.equal(after.data.dailyStatuses['2026-11-16'].a.label, 'אילוץ')
       assert.equal(after.data.dailyStatuses['2026-11-16'].a.blocksShifts, true)
       assert.equal(after.data.dailyStatuses['2026-11-16'].a.note, 'בקשה מאושרת')
+      assert.equal(after.data.dailyStatuses['2026-11-16'].a.requestId, monday)
       assert.ok(!JSON.stringify(after.data).includes('Requested'))
       assert.deepEqual(after.data.lockedSlots, initial.lockedSlots)
       await decide(sunday, 'denied')
@@ -178,6 +184,8 @@ test('workspace RPCs enforce identity, roles, invitations, concurrency and appro
       await db.exec('reset role; set role anon')
       await assert.rejects(() => db.query('select * from public.sm_workspaces'), /permission denied/)
       await assert.rejects(() => scalar("select public.sm_create_workspace('Anonymous') as result"), /permission denied/)
+      await assert.rejects(() => state(), /permission denied/)
+      await assert.rejects(() => scalar('select public.sm_revoke_request_approval($1,$2) as result', [monday, 0]), /permission denied/)
     })
     await t.test('database conflict coverage matches the scheduler for midnight and multi-day boundaries', async () => {
       await db.exec('reset role')
@@ -198,6 +206,93 @@ test('workspace RPCs enforce identity, roles, invitations, concurrency and appro
           assert.equal(await scalar('select shift_private.has_assignment($1,$2,$3) as result', [schedule, 'b', key]), false)
         }
       }
+    })
+    await t.test('constraints and requests are private to the requester and managers, including raw JSON access', async () => {
+      await login(manager)
+      const invite = await scalar('select public.sm_create_invite($1) as result', [workspace])
+      await login(outsider)
+      await scalar('select public.sm_join_workspace($1) as result', [invite.token])
+      await login(manager)
+      await scalar('select public.sm_update_member($1,$2,$3,$4) as result', [workspace, outsider, 'member', 'b'])
+      const before = await state()
+      before.data.workers[0].excludedDays = [5]
+      before.data.workers[1].excludedDays = [6]
+      before.data.dailyStatuses['2026-11-20'] = {
+        a: { label: 'אילוץ', color: '#ff9999', blocksShifts: true, note: 'Private manual note' },
+        b: { label: 'חג', color: '#ffd9df', blocksShifts: true, note: '' },
+      }
+      await save(before.data)
+      assert.ok((await state()).data.dailyStatuses['2026-11-16'].a)
+      await login(employee)
+      const own = await state()
+      assert.ok(own.data.dailyStatuses['2026-11-16'].a)
+      assert.deepEqual(own.data.workers[0].excludedDays, [5])
+      assert.deepEqual(own.data.workers[1].excludedDays, [])
+      assert.ok((await db.query('select id from public.sm_requests where id = $1', [monday])).rows.length)
+      await login(outsider)
+      const other = await state()
+      assert.equal(other.data.dailyStatuses['2026-11-16'], undefined)
+      assert.equal(other.data.dailyStatuses['2026-11-20'].a, undefined)
+      assert.ok(other.data.dailyStatuses['2026-11-20'].b)
+      assert.deepEqual(other.data.workers[0].excludedDays, [])
+      assert.deepEqual(other.data.workers[1].excludedDays, [6])
+      assert.deepEqual(other.data.assignments, before.data.assignments)
+      assert.equal((await db.query('select * from public.sm_requests')).rows.length, 0)
+      await assert.rejects(() => db.query("select data->'dailyStatuses' from public.sm_workspaces"), /permission denied/)
+      assert.equal((await db.query('select id,name,revision,created_at from public.sm_workspaces')).rows.length, 1)
+      assert.ok(!JSON.stringify(other).includes('Private manual note'))
+      // Changing account-to-worker links must not transfer ownership of requests.
+      await login(manager)
+      await scalar('select public.sm_update_member($1,$2,$3,$4) as result', [workspace, employee, 'member', null])
+      await scalar('select public.sm_update_member($1,$2,$3,$4) as result', [workspace, outsider, 'member', 'a'])
+      await login(outsider)
+      assert.equal((await state()).data.dailyStatuses['2026-11-16'], undefined)
+      await login(employee)
+      assert.ok((await state()).data.dailyStatuses['2026-11-16'].a)
+      await login(manager)
+      await scalar('select public.sm_update_member($1,$2,$3,$4) as result', [workspace, outsider, 'member', 'b'])
+      await scalar('select public.sm_update_member($1,$2,$3,$4) as result', [workspace, employee, 'member', 'a'])
+    })
+    await t.test('cancelling approval is manager-only, versioned, preserves shifts and returns to pending', async () => {
+      await login(employee)
+      const ownRevision = (await state()).revision
+      await assert.rejects(() => scalar('select public.sm_revoke_request_approval($1,$2) as result', [monday, ownRevision]), /MANAGER_REQUIRED/)
+      await login(manager)
+      const before = await state()
+      await assert.rejects(() => scalar('select public.sm_revoke_request_approval($1,$2) as result', [monday, before.revision - 1]), /STALE_REVISION/)
+      await scalar('select public.sm_revoke_request_approval($1,$2) as result', [monday, before.revision])
+      const after = await state()
+      assert.equal(after.revision, before.revision + 1)
+      assert.equal(after.data.dailyStatuses['2026-11-16'], undefined)
+      assert.deepEqual(after.data.assignments, before.data.assignments)
+      assert.deepEqual(after.data.lockedSlots, before.data.lockedSlots)
+      assert.deepEqual(after.data.dailyStatuses['2026-11-20'], before.data.dailyStatuses['2026-11-20'])
+      const request = (await db.query('select * from public.sm_requests where id = $1', [monday])).rows[0]
+      assert.equal(request.status, 'pending')
+      assert.equal(request.decided_by, null)
+      assert.equal(request.decided_at, null)
+      const target = createOccurrence(week, 0, shift)
+      assert.equal(assignmentConflict(worker, target, [shift], {}, before.data.dailyStatuses), 'daily-status')
+      assert.equal(assignmentConflict(worker, target, [shift], {}, after.data.dailyStatuses), null)
+      await assert.rejects(() => scalar('select public.sm_revoke_request_approval($1,$2) as result', [monday, after.revision]), /REQUEST_NOT_APPROVED_CONSTRAINT/)
+      await decide(monday, 'approved')
+      assert.equal((await state()).data.dailyStatuses['2026-11-16'].a.requestId, monday)
+    })
+    await t.test('upgrade backfills legacy approvals and cancellation never removes an unrelated cell', async () => {
+      await db.exec('reset role')
+      await db.query("update public.sm_workspaces set data = data #- array['dailyStatuses','2026-11-16','a','requestId'] where id = $1", [workspace])
+      await db.exec(await readFile(new URL('../supabase/migrations/202611190002_constraint_privacy.sql', import.meta.url), 'utf8'))
+      await login(manager)
+      assert.equal((await state()).data.dailyStatuses['2026-11-16'].a.requestId, monday)
+      const data = (await state()).data
+      data.dailyStatuses['2026-11-16'].a = { label: 'Office', color: '#123456', note: 'Keep', blocksShifts: false }
+      await db.exec('reset role')
+      await db.query('update public.sm_workspaces set data = $1 where id = $2', [data, workspace])
+      await login(manager)
+      const revision = (await state()).revision
+      await assert.rejects(() => scalar('select public.sm_revoke_request_approval($1,$2) as result', [monday, revision]), /REQUEST_STATUS_CHANGED/)
+      assert.equal((await state()).data.dailyStatuses['2026-11-16'].a.note, 'Keep')
+      assert.equal((await db.query('select status from public.sm_requests where id = $1', [monday])).rows[0].status, 'approved')
     })
   } finally { await db.close() }
 })

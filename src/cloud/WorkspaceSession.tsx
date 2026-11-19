@@ -32,7 +32,7 @@ export default function WorkspaceSession({ client, workspaceId, userId, onBack, 
   const refresh = useCallback(async (discard = false) => {
     const request = ++sequence.current
     const [workspace, members, requests, invites] = await Promise.all([
-      client.from('sm_workspaces').select('*').eq('id', workspaceId).single(),
+      client.rpc('sm_get_workspace', { p_workspace: workspaceId }),
       client.from('sm_members').select('*').eq('workspace_id', workspaceId),
       client.from('sm_requests').select('*').eq('workspace_id', workspaceId).order('created_at', { ascending: false }),
       client.from('sm_invites').select('*').eq('workspace_id', workspaceId).order('expires_at', { ascending: false }),
@@ -151,7 +151,7 @@ export default function WorkspaceSession({ client, workspaceId, userId, onBack, 
       <fieldset disabled={busy} className="cloud-fields cloud-schedule">
         <App cloud={{
           data: model.draft, onChange: change, canEdit: manager, requests: model.requests,
-          renderRequests: (week) => <RequestsPanel key={week} week={week} member={me} requests={model.requests}
+          renderRequests: (week) => <RequestsPanel key={`requests:${week}`} week={week} member={me} requests={model.requests}
             data={model.snapshot.data} dirty={dirty} busy={busy}
             onSubmit={(date, kind, reason) => perform(async () => {
               const result = await client.rpc('sm_submit_request', { p_workspace: workspaceId, p_date: date, p_kind: kind, p_reason: reason })
@@ -160,7 +160,11 @@ export default function WorkspaceSession({ client, workspaceId, userId, onBack, 
             onDecide={(id, decision, note) => perform(async () => {
               const result = await client.rpc('sm_decide_request', { p_request: id, p_decision: decision, p_note: note, p_revision: model.snapshot.revision })
               if (result.error) throw result.error
-            }, decision === 'approved' ? 'הבקשה אושרה והתאריך חסום לשיבוץ.' : 'הבקשה נדחתה; הסידור לא השתנה.')} />,
+            }, decision === 'approved' ? 'הבקשה אושרה והתאריך חסום לשיבוץ.' : 'הבקשה נדחתה; הסידור לא השתנה.')}
+            onRevoke={(id) => perform(async () => {
+              const result = await client.rpc('sm_revoke_request_approval', { p_request: id, p_revision: model.snapshot.revision })
+              if (result.error) throw result.error
+            }, 'האישור בוטל והבקשה חזרה להמתנה. החסימה הוסרה; השיבוצים והנעילות לא שונו.')} />,
         }} />
       </fieldset>
     </>}

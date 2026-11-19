@@ -7,6 +7,7 @@ type Props = {
   week: string; member: Member; requests: ShiftRequest[]; data: ScheduleData; dirty: boolean; busy: boolean
   onSubmit: (date: string, kind: ShiftRequest['kind'], reason: string) => Promise<void>
   onDecide: (id: string, decision: 'approved' | 'denied', note: string) => Promise<void>
+  onRevoke: (id: string) => Promise<void>
 }
 const LABELS = { constraint: 'אילוץ', holiday: 'חג' }
 const STATES = { pending: 'ממתינה', approved: 'אושרה', denied: 'נדחתה' }
@@ -19,7 +20,8 @@ export default function RequestsPanel(props: Props) {
   const last = new Date(`${week}T12:00:00Z`)
   last.setUTCDate(last.getUTCDate() + 6)
   const end = last.toISOString().slice(0, 10)
-  const weekly = requests.filter((request) => request.request_date >= week && request.request_date <= end)
+  const weekly = requests.filter((request) => request.request_date >= week && request.request_date <= end &&
+    (member.role === 'manager' || request.user_id === member.user_id))
   return <details className="card requests-panel">
     <summary>בקשות לשבוע זה — {weekly.filter((request) => request.status === 'pending').length} ממתינות</summary>
     <p>בקשות אילוץ וחג חוסמות יום מלא רק לאחר אישור מנהל. הן חלות על התאריכים שנבחרו, כולל משמרות לילה ומשמרות רצופות שנוגעות בהם.</p>
@@ -39,14 +41,15 @@ export default function RequestsPanel(props: Props) {
     {member.role === 'manager' && dirty && <p className="validation-message">יש לשמור או לבטל שינויים בסידור לפני טיפול בבקשות.</p>}
     <div className="request-list">
       {weekly.map((request) => <RequestRow key={request.id} request={request} data={data} manager={member.role === 'manager'}
-        disabled={busy || dirty} onDecide={props.onDecide} />)}
+        disabled={busy || dirty} onDecide={props.onDecide} onRevoke={props.onRevoke} />)}
       {weekly.length === 0 && <p>אין בקשות לשבוע זה.</p>}
     </div>
   </details>
 }
 
-function RequestRow({ request, data, manager, disabled, onDecide }: {
+function RequestRow({ request, data, manager, disabled, onDecide, onRevoke }: {
   request: ShiftRequest; data: ScheduleData; manager: boolean; disabled: boolean; onDecide: Props['onDecide']
+  onRevoke: Props['onRevoke']
 }) {
   const [note, setNote] = useState('')
   const conflicts = request.status === 'pending' && manager
@@ -60,6 +63,10 @@ function RequestRow({ request, data, manager, disabled, onDecide }: {
     <span className={`request-state ${request.status}`}>{STATES[request.status]}</span>
     {request.reason && <p>{request.reason}</p>}
     {request.decision_note && <p>תשובת מנהל: {request.decision_note}</p>}
+    {manager && request.status === 'approved' && request.kind === 'constraint' &&
+      <button type="button" className="button secondary" disabled={disabled} onClick={() => {
+        if (window.confirm('לבטל את אישור האילוץ ולהחזיר את הבקשה להמתנה? החסימה תוסר, אך שיבוצים שהוסרו בעבר לא ישוחזרו.')) onRevoke(request.id)
+      }}>ביטול אישור אילוץ</button>}
     {manager && request.status === 'pending' && <>
       {conflicts.length > 0 && <p className="validation-message">לפני אישור יש להסיר ולשמור את השיבוצים: {conflicts.map((item) => item.shift.name).join(', ')}. גם שיבוצים מוגנים נשארים עד להסרה ידנית.</p>}
       {existingStatus && <p className="validation-message">קיים סטטוס ״{existingStatus.label}״ בתא. יש להסירו ולשמור לפני אישור כדי לא לדרוס מידע.</p>}

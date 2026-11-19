@@ -60,12 +60,47 @@ Vercel continues to host the Vite frontend. Supabase provides PostgreSQL and Aut
 no separate application server or private database key is needed in Vercel.
 
 1. Create a Supabase project. In its SQL Editor, run
-   `supabase\migrations\202611190001_workspaces.sql` **once**. This creates the
+   `supabase\migrations\202611190001_workspaces.sql` **once**, followed by
+   `supabase\migrations\202611190002_constraint_privacy.sql`. This creates the
    workspace tables, row-level access policies, and transactional RPC functions.
    The migration uses `sm_`-prefixed tables and a private helper schema.
 2. In Supabase's project connection/API settings, copy the **project URL** and
    **publishable key** (`sb_publishable_...`). The legacy public `anon` key also
-   works. Never use a `service_role`, `sb_secret_...`, or database password.
+   works. N
+   Add the following DNS records in your domain provider.
+   Domain Verification
+   DKIM
+   Type	Host	Value	TTL
+   TXT	
+   resend._domainkey.soc
+   p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQCqcaG+0EPI1uBlGbDD0U6wZTJzImhtLkvC7jsARKdy+uNTa+PhM+42Nj9nPRZFIP7WCgFapVZAO38GcIFjdQDebGH1FViLooW1e1CEdnLD5giWItPI63/k5EM6mGF0jZFVSVEq+VmMMLO/7nT1s0NqfmZZufBroYZfroH4ON0SRQIDAQAB
+   Auto
+   Enable Sending
+   
+   
+   SPF
+   Type	Host	Value	TTL
+   CNAME	
+   rsend.soc
+   rsend-apne1.forge.rmta.net
+   Auto
+   CNAME	
+   send.soc
+   send.forge.rmta.net
+   Auto
+   DMARC
+   (Recommended)
+   Type	Name	Content	TTL	Priority
+   TXT	
+   _dmarc
+   v=DMARC1; p=none;
+   Auto	
+   Enable receiving
+   
+   
+   /docs
+   /domains
+   ever use a `service_role`, `sb_secret_...`, or database password.
 3. In **Vercel → Project → Settings → Environment Variables**, set:
 
    ```text
@@ -99,6 +134,15 @@ public values, and allow `http://localhost:5173/**` in Supabase's redirect URLs.
 Run `npm run dev`. Without cloud configuration, the app explains setup and offers
 an explicit **local-only** mode.
 
+### Upgrading an existing workspace
+
+If the original SQL migration is already installed, run only the **contents** of
+`supabase\migrations\202611190002_constraint_privacy.sql` in the Supabase SQL Editor,
+then deploy the updated frontend and reload open app tabs. Do not paste the file
+path into the SQL Editor, and do not rerun the original table-creation migration.
+This upgrade preserves existing schedules and requests, adds approval cancellation,
+and replaces direct schedule reads with a caller-specific RPC for privacy.
+
 ### Shared scheduling and requests
 
 Managers edit a local draft and publish with **שמירת שינויים לסביבה**.
@@ -114,17 +158,24 @@ covers one whole calendar date; submit additional requests for additional dates.
 Pending requests do not block scheduling. Managers must save any schedule changes
 before deciding requests. Approval rejects overlapping assignments and existing
 cell statuses instead of removing them silently. Approved blocks cannot be
-removed through ordinary cell editing or backup import; approval is final in
-this version. Denied requests can be submitted again.
+removed through ordinary cell editing or backup import. Managers can use
+**ביטול אישור אילוץ** on an approved constraint to return it to pending review and
+remove only its approved block. Existing assignments, locks and unrelated statuses
+are preserved; previously removed assignments are not restored. Save any draft
+before cancelling approval. Denied requests can be submitted again.
 
 Invitation links expire after seven days and can be revoked. Revocation prevents
 new joins; it does not remove existing members. An invitation never grants manager
 permissions, even if a client supplies forged account metadata.
 
-Workspace members can read the complete saved schedule and worker information
-within that workspace. Request reasons and decision notes are readable only by
-the requester and workspace managers; the shared calendar shows the approved
-status without the private reason. Membership, edits, decisions, and worker links are enforced
+Workspace members can read the saved schedule within that workspace. Constraint
+requests and their calendar blocks are visible only to managers and the original
+requester. Other workers' recurring excluded days and manually entered constraint
+statuses are also omitted from member responses. Holiday calendar blocks remain
+visible. Request reasons and decision notes are readable only by the requester and
+workspace managers. Full schedule JSON is not directly readable by members;
+the database filters it before returning it to the app. Membership, edits,
+decisions, and worker links are enforced
 in PostgreSQL, not just by hidden frontend controls.
 
 ### Existing browser data

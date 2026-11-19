@@ -3,7 +3,7 @@ import { BUILTIN_STATUSES, SHIFT_COLORS, STATUS_PRESETS, textColor } from './dai
 import type { DailyStatus, DailyStatuses, StatusDefinition } from './daily-status'
 import { shiftAppearance } from './shift-status'
 import { StatusBadge } from './StatusSettings'
-import { isVisibleOnDay, occursOnDay, visibleOccurrences, weekOccurrences, workerRestOnDate } from './scheduling'
+import { isVisibleInWorkerCell, isVisibleOnDay, occursOnDay, visibleOccurrences, weekOccurrences, workerRestOnDate } from './scheduling'
 import type { AssignmentsByWeek, DayIndex, LockedSlotsByWeek, ShiftOccurrence, ShiftTemplate, Worker } from './scheduling'
 import './WorkerWeekTable.css'
 
@@ -52,7 +52,7 @@ export default function WorkerWeekTable(props: Props) {
                   {dates.map((date, index) => {
                     const day = index as DayIndex
                     const assigned = occurrences.filter((item) =>
-                      isVisibleOnDay(item, week, day) && assignments[item.week]?.[item.key]?.includes(worker.id),
+                      isVisibleInWorkerCell(item, week, day) && assignments[item.week]?.[item.key]?.includes(worker.id),
                     )
                     const status = statuses[date]?.[worker.id]
                     const rest = workerRestOnDate(worker.id, date, shifts, assignments)
@@ -70,17 +70,16 @@ export default function WorkerWeekTable(props: Props) {
                           {assigned.map((item) => {
                             const appearance = shiftAppearance(item.shift, customStatuses)
                             return <span className="cell-band" key={`${item.week}:${item.key}`} style={{ backgroundColor: appearance.color, color: textColor(appearance.color) }}
-                              title={`${item.shift.name} ${item.shift.start}–${item.shift.end}`}>
+                              title={`${item.shift.name} ${item.shift.start}–${item.shift.end}${locks[item.week]?.includes(item.key) ? ' · מוגן' : ''}`}>
                               {appearance.label}
-                              <small>{item.shift.name}{locks[item.week]?.includes(item.key) ? ' · מוגן' : ''}</small>
                             </span>
                           })}
-                          {rest.length > 0 && <span className="cell-band" style={{ backgroundColor: SHIFT_COLORS.rest }}>אפטר<small>מנוחה עד סוף היום</small></span>}
-                          {status && <span className="cell-band" style={{ backgroundColor: status.color, color: textColor(status.color) }}>
-                            {status.label}{status.note && <small>{status.note}</small>}
-                            {status.blocksShifts && <small>חוסם שיבוץ</small>}
+                          {rest.length > 0 && <span className="cell-band" style={{ backgroundColor: SHIFT_COLORS.rest }} title="מנוחה עד סוף היום">אפטר</span>}
+                          {status && <span className="cell-band" style={{ backgroundColor: status.color, color: textColor(status.color) }}
+                            title={[status.note, status.blocksShifts ? 'חוסם שיבוץ' : ''].filter(Boolean).join(' · ')}>
+                            {status.label}
                           </span>}
-                          {excluded && <span className="cell-band recurring-exclusion">אילוץ<small>יום לא זמין קבוע</small></span>}
+                          {excluded && <span className="cell-band recurring-exclusion" title="יום לא זמין קבוע">אילוץ</span>}
                           {labels.length === 0 && <span className="empty-cell">{props.canEdit ? '＋' : '—'}</span>}
                         </button>
                       </td>
@@ -95,8 +94,6 @@ export default function WorkerWeekTable(props: Props) {
         <aside className="matrix-legend" aria-label="מקרא צבעים">
           <h2>מקרא</h2>
           {[...BUILTIN_STATUSES, ...customStatuses].map((item) => <div key={item.id} style={{ backgroundColor: item.color, color: textColor(item.color) }}>{item.label}</div>)}
-          <p>לחץ על תא לפרטים{props.canEdit ? ' ולעריכה' : ''}. סטטוס המשמרת וצבעו נקבעים בהגדרות המשמרת. מנוחה מוצגת לפי השיבוצים בפועל.</p>
-          <p>תא ריק אינו מציין נוכחות במשרד. אפשר להוסיף סטטוס מותאם ולבחור צבע.</p>
         </aside>
       </div>
       {selected && selectedWorker && <CellEditor key={`${week}:${selected.workerId}:${selected.day}`}

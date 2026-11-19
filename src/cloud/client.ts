@@ -30,6 +30,7 @@ type Database = {
     }
     Views: Record<string, never>
     Functions: {
+      sm_get_workspace: { Args: { p_workspace: string }; Returns: WorkspaceRow }
       sm_create_workspace: { Args: { p_name: string }; Returns: string }
       sm_create_invite: { Args: { p_workspace: string }; Returns: Invite }
       sm_revoke_invite: { Args: { p_workspace: string; p_invite: string }; Returns: undefined }
@@ -38,6 +39,7 @@ type Database = {
       sm_save_workspace: { Args: { p_workspace: string; p_revision: number; p_data: ScheduleData }; Returns: WorkspaceRow }
       sm_submit_request: { Args: { p_workspace: string; p_date: string; p_kind: ShiftRequest['kind']; p_reason: string }; Returns: string }
       sm_decide_request: { Args: { p_request: string; p_decision: 'approved' | 'denied'; p_note: string; p_revision: number }; Returns: undefined }
+      sm_revoke_request_approval: { Args: { p_request: string; p_revision: number }; Returns: undefined }
     }
   }
 }
@@ -66,6 +68,9 @@ const errors: Record<string, string> = {
   REQUEST_ALREADY_DECIDED: 'הבקשה כבר טופלה. רענן את הרשימה.',
   UNKNOWN_WORKER: 'העובד אינו קיים בסידור השמור. שמור את העובד או עדכן את קישור החשבון.',
   LAST_MANAGER: 'לא ניתן להסיר את הרשאת המנהל האחרון בסביבה.',
+  MEMBERSHIP_REQUIRED: 'אין לך הרשאה לסביבה זו.',
+  REQUEST_NOT_APPROVED_CONSTRAINT: 'ניתן לבטל אישור רק של בקשת אילוץ מאושרת. רענן את הרשימה.',
+  REQUEST_STATUS_CHANGED: 'הסטטוס בתאריך השתנה ואינו שייך לאישור זה. לא הוסר מידע; יש לבדוק את התא.',
 }
 
 export function cloudError(error: unknown): string {

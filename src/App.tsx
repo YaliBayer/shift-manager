@@ -588,7 +588,7 @@ function App({ cloud }: { cloud?: CloudSchedule }) {
               שיבוצים מגרסאות ישנות נשמרים כמוגנים. תור שבת ואיסור לילות אוטומטיים אינם מגבילים שיבוץ ידני; שאר המגבלות נשמרות.
             </p>
             </details>
-            {scheduleView === 'matrix' ? <WorkerWeekTable key={weekStart} week={weekStart} dates={weekDays.map(toDateKey)}
+            {scheduleView === 'matrix' ? <WorkerWeekTable key={`matrix:${weekStart}`} week={weekStart} dates={weekDays.map(toDateKey)}
               workers={workers} shifts={shifts} assignments={assignments} locks={lockedSlots} statuses={dailyStatuses}
               customStatuses={customStatuses}
               canEdit={canEdit}

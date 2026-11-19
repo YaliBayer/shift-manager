@@ -14,18 +14,16 @@
 .worker-matrix tbody th { background: #f0f0f0; padding: 10px 6px; font-weight: 650; }
 .worker-matrix tr > :first-child { position: sticky; left: 0; z-index: 2; }
 .worker-matrix thead tr:nth-child(2) > :first-child { position: static; }
-.matrix-cell { display: flex; flex-direction: column; align-items: stretch; justify-content: center; width: 100%; min-height: 46px; height: 100%; padding: 0; background: white; color: #172033; border: 0; }
+.matrix-cell { display: flex; flex-direction: column; align-items: stretch; justify-content: center; width: 100%; min-height: 48px; height: 100%; padding: 0; background: white; color: #172033; border: 0; }
 .matrix-cell:focus-visible { outline: 3px solid #2f6feb; outline-offset: -3px; }
 .matrix-cell:hover { box-shadow: inset 0 0 0 2px #2f6feb; }
-.cell-band { padding: 7px 3px; display: block; font-weight: 650; overflow-wrap: anywhere; }
+.cell-band { padding: 7px 3px; display: flex; align-items: center; justify-content: center; min-height: 48px; font-weight: 650; overflow-wrap: anywhere; }
 .cell-band + .cell-band { border-top: 1px solid #ffffff99; }
-.cell-band small { display: block; font-size: 10px; font-weight: 400; }
 .empty-cell { color: #a7b2c3; }
 .recurring-exclusion { background: #ff9999; }
 .matrix-legend { direction: rtl; text-align: center; }
 .matrix-legend h2 { font-size: 15px; margin: 0 0 8px; }
 .matrix-legend > div { padding: 4px; border: 1px solid #637186; margin-bottom: -1px; font-size: 12px; }
-.matrix-legend p { color: #5e6a80; font-size: 11px; margin: 12px 0 0; line-height: 1.6; }
 .matrix-empty { padding: 20px !important; }
 .view-toggle { display: flex; gap: 8px; margin-bottom: 16px; }
 .view-toggle .selected { border-color: #2f6feb; color: #245bc2; background: #eaf1ff; }
@@ -48,6 +46,5 @@
   .matrix-layout { grid-template-columns: 1fr; }
   .matrix-legend { display: flex; gap: 5px; flex-wrap: wrap; align-items: center; }
   .matrix-legend > div { padding: 5px 12px; margin: 0; }
-  .matrix-legend p { flex-basis: 100%; text-align: right; }
   .worker-matrix th:first-child { width: 110px; }
 }

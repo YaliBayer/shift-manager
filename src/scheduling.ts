@@ -204,6 +204,13 @@ export function isVisibleOnDay(occurrence: ShiftOccurrence, week: string, day: D
     : occurrence.week === week && occurrence.day === day
 }
 
+export function isVisibleInWorkerCell(occurrence: ShiftOccurrence, week: string, day: DayIndex) {
+  if (!isVisibleOnDay(occurrence, week, day)) return false
+  const sunday = weekMinutes(week)
+  return !(day === 0 && occurrence.shift.grouping && occurrence.start < sunday &&
+    occurrence.end >= sunday && occurrence.end < sunday + DAY)
+}
+
 function restEndsAt(occurrence: ShiftOccurrence) {
   if (occurrence.shift.grouping || shiftPeriod(occurrence.shift) === 'night') {
     return (Math.floor(occurrence.end / DAY) + 1) * DAY

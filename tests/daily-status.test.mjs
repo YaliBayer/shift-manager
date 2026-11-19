@@ -5,6 +5,7 @@ import { isShiftStatusConfiguration, shiftAppearance } from '../src/shift-status
 import {
   assignmentConflict, createOccurrence, coveredDates, generateWeek,
   protectedAssignmentProblems, workerRestOnDate,
+  isVisibleInWorkerCell, isVisibleOnDay, occursOnDay,
 } from '../src/scheduling.ts'
 
 const week = '2026-11-15'
@@ -62,6 +63,21 @@ test('derived rest follows assigned nights and groups across weeks and disappear
   assert.equal(workerRestOnDate('a', nextWeek, [weekend], {}).length, 0)
   const night = { ...shift, id: 'night', start: '20:00', end: '00:00', activeDays: [6] }
   assert.equal(workerRestOnDate('a', nextWeek, [night], { [week]: { '6:night': ['a'] } }).length, 1)
+})
+
+test('Sunday worker cells hide only the ending Saturday continuation without changing its coverage or rest', () => {
+  const occurrence = createOccurrence(week, 4, weekend)
+  const assignments = { [week]: { [occurrence.key]: ['a'] } }
+  assert.equal(isVisibleInWorkerCell(occurrence, nextWeek, 0), false)
+  assert.equal(isVisibleInWorkerCell(occurrence, week, 6), true)
+  assert.equal(isVisibleOnDay(occurrence, nextWeek, 0), true)
+  assert.equal(occursOnDay(occurrence, nextWeek, 0), true)
+  assert.equal(workerRestOnDate('a', nextWeek, [weekend], assignments).length, 1)
+  const mondayEnd = createOccurrence(week, 4, { ...weekend, grouping: { startDay: 4, endDay: 1 } })
+  assert.equal(isVisibleInWorkerCell(mondayEnd, nextWeek, 0), true)
+  const newSundayShift = createOccurrence(nextWeek, 0, { ...weekend, grouping: { startDay: 0, endDay: 0 } })
+  assert.equal(isVisibleInWorkerCell(newSundayShift, nextWeek, 0), true)
+  assert.equal(isVisibleInWorkerCell(createOccurrence(nextWeek, 0, shift), nextWeek, 0), true)
 })
 
 test('cell edits and clearing preserve other workers and dates and backup fields round trip', () => {
