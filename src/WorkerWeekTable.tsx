@@ -18,6 +18,7 @@ type Props = {
   locks: LockedSlotsByWeek
   statuses: DailyStatuses
   customStatuses: StatusDefinition[]
+  canEdit: boolean
   onSaveStatus: (date: string, workerId: string, status: DailyStatus | null) => string | null
   onAssign: (occurrence: ShiftOccurrence, workerId: string) => string | null
   onUnassign: (occurrence: ShiftOccurrence, workerId: string) => void
@@ -65,7 +66,7 @@ export default function WorkerWeekTable(props: Props) {
                     return (
                       <td key={date} dir="rtl">
                         <button className="matrix-cell" onClick={() => setSelected({ workerId: worker.id, day })}
-                          aria-label={`${worker.name}, ${dateLabel(date)}: ${labels.join(', ') || 'ללא שיבוץ'} — פרטים ועריכה`}>
+                          aria-label={`${worker.name}, ${dateLabel(date)}: ${labels.join(', ') || 'ללא שיבוץ'} — ${props.canEdit ? 'פרטים ועריכה' : 'פרטים'}`}>
                           {assigned.map((item) => {
                             const appearance = shiftAppearance(item.shift, customStatuses)
                             return <span className="cell-band" key={`${item.week}:${item.key}`} style={{ backgroundColor: appearance.color, color: textColor(appearance.color) }}
@@ -80,7 +81,7 @@ export default function WorkerWeekTable(props: Props) {
                             {status.blocksShifts && <small>חוסם שיבוץ</small>}
                           </span>}
                           {excluded && <span className="cell-band recurring-exclusion">אילוץ<small>יום לא זמין קבוע</small></span>}
-                          {labels.length === 0 && <span className="empty-cell">＋</span>}
+                          {labels.length === 0 && <span className="empty-cell">{props.canEdit ? '＋' : '—'}</span>}
                         </button>
                       </td>
                     )
@@ -94,7 +95,7 @@ export default function WorkerWeekTable(props: Props) {
         <aside className="matrix-legend" aria-label="מקרא צבעים">
           <h2>מקרא</h2>
           {[...BUILTIN_STATUSES, ...customStatuses].map((item) => <div key={item.id} style={{ backgroundColor: item.color, color: textColor(item.color) }}>{item.label}</div>)}
-          <p>לחץ על תא לפרטים ולעריכה. סטטוס המשמרת וצבעו נקבעים בהגדרות המשמרת. מנוחה מוצגת לפי השיבוצים בפועל.</p>
+          <p>לחץ על תא לפרטים{props.canEdit ? ' ולעריכה' : ''}. סטטוס המשמרת וצבעו נקבעים בהגדרות המשמרת. מנוחה מוצגת לפי השיבוצים בפועל.</p>
           <p>תא ריק אינו מציין נוכחות במשרד. אפשר להוסיף סטטוס מותאם ולבחור צבע.</p>
         </aside>
       </div>
@@ -141,7 +142,7 @@ function CellEditor(props: Props & { worker: Worker; day: DayIndex; occurrences:
               {dateLabel(new Date(item.start * 60000).toISOString().slice(0, 10))} — {dateLabel(new Date(item.end * 60000).toISOString().slice(0, 10))}
               {' · '}משמרת רצופה: שינוי חל על כל הימים, גם בשבוע סמוך.
             </small>}
-            <div className="cell-shift-actions">
+            {props.canEdit && <div className="cell-shift-actions">
               <button type="button" className="button secondary" disabled={!assigned && full} onClick={() => {
                 if (assigned) {
                   if (item.shift.grouping && !window.confirm('להסיר את העובד מכל המשמרת הרצופה, בכל הימים שלה?')) return
@@ -152,13 +153,14 @@ function CellEditor(props: Props & { worker: Worker; day: DayIndex; occurrences:
               <button type="button" className="button secondary" onClick={() => props.onLock(item, !locked)}>
                 {locked ? 'שחרור המשמרת לאוטומטי' : 'נעילת המשמרת'}
               </button>
-            </div>
+            </div>}
             {error && <p role="alert" className="validation-message">{error}</p>}
           </article>
         })}
         {dayOccurrences.length === 0 && <p>אין משמרות שמתחילות או נמשכות ביום זה.</p>}
       </div>
-      <form onSubmit={(event) => {
+      {!props.canEdit && <p className="cell-help">תצוגה בלבד. להגשת אילוץ או חג השתמש בטופס הבקשות השבועי.</p>}
+      {props.canEdit && <form onSubmit={(event) => {
         event.preventDefault()
         if (draft && !draft.label.trim()) { setError('יש להזין שם לסטטוס.'); return }
         const message = props.onSaveStatus(date, worker.id, draft ? { ...draft, label: draft.label.trim() } : null)
@@ -190,7 +192,7 @@ function CellEditor(props: Props & { worker: Worker; day: DayIndex; occurrences:
         </div>
         <p className="cell-help">סטטוס אינו יוצר משמרת ואינו מחליף שיבוץ קיים. לפני שמירת חסימה יש להסיר שיבוצים החופפים לתאריך, כולל משמרת לילה מהיום הקודם.</p>
         <div className="modal-actions"><button type="button" className="button secondary" onClick={onClose}>ביטול</button><button className="button primary">שמירת תא</button></div>
-      </form>
+      </form>}
     </dialog>
   )
 }

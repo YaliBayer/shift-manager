@@ -1,0 +1,43 @@
+.cloud-page { max-width: 860px; padding: 32px 20px; margin: auto; }
+.cloud-card { padding: 28px; }
+.cloud-card h1 { font-size: 28px; margin: 0 0 18px; }
+.cloud-card p, .cloud-card li { line-height: 1.8; }
+.cloud-card ol { padding-right: 22px; overflow-wrap: anywhere; }
+.cloud-fields { border: 0; padding: 0; margin: 0; min-width: 0; }
+.cloud-fields > .button, .requests-panel form > .button { margin-top: 16px; }
+.cloud-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; align-items: center; }
+.cloud-banner, .workspace-bar { padding: 14px 24px; display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; background: #e7eefb; }
+.workspace-bar small, .member-row small { display: block; font-size: 12px; margin-top: 5px; }
+.cloud-sync { background: #f0f5ff; padding: 12px 24px; font-size: 13px; overflow-wrap: anywhere; }
+.cloud-sync p { margin: 8px 0; }
+.workspace-list { display: grid; gap: 10px; margin: 20px 0; }
+.cloud-name { display: grid; gap: 8px; margin: 18px 0; }
+.cloud-card input, .workspace-settings input, .workspace-settings select, .request-row input {
+  border: 1px solid #d5deed; border-radius: 6px; padding: 10px; background: white; color: #172033; min-width: 0;
+}
+.invite-prompt { border: 1px solid #b5cbee; padding: 16px; border-radius: 8px; margin: 16px 0; }
+.workspace-settings { margin: 20px 24px; padding: 24px; }
+.workspace-settings h2 { font-size: 20px; margin: 16px 0; }
+.workspace-settings p { font-size: 13px; line-height: 1.7; }
+.member-list { display: grid; gap: 10px; }
+.member-row { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; border-bottom: 1px solid #d5deed; padding: 12px 0; }
+.member-row label, .invite-row label, .request-row label { display: grid; gap: 5px; font-size: 12px; }
+.member-row > div { flex: 1; min-width: 160px; }
+.invite-row { margin-top: 16px; display: grid; gap: 8px; }
+.invite-row input { width: 100%; }
+.invite-row button { justify-self: start; }
+.requests-panel { padding: 16px 20px; margin-bottom: 18px; }
+.requests-panel summary { cursor: pointer; font-weight: 700; }
+.requests-panel > p { font-size: 13px; line-height: 1.7; margin: 14px 0; }
+.request-list { display: grid; gap: 10px; margin-top: 18px; }
+.request-row { padding: 14px; border: 1px solid #d5deed; border-radius: 8px; font-size: 13px; }
+.request-row p { margin: 10px 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.request-state { display: inline-block; padding: 4px 10px; margin-right: 12px; border-radius: 5px; background: #fff3cc; }
+.request-state.approved { background: #d3efcd; }
+.request-state.denied { background: #f4d2d2; }
+.cloud-schedule:disabled { opacity: .8; }
+@media (max-width: 720px) {
+  .cloud-card { padding: 18px; }
+  .workspace-settings { margin: 12px; padding: 16px; }
+  .member-row label { width: 100%; }
+}

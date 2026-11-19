@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import type { Dispatch, ReactNode, SetStateAction } from 'react'
 import {
   assignmentConflict,
   createOccurrence,
@@ -16,12 +17,14 @@ import {
   weekOccurrences,
 } from './scheduling'
 import type { AssignmentsByWeek, DayIndex, LockedSlotsByWeek, ShiftOccurrence, ShiftTemplate, Worker } from './scheduling'
-import { BUILTIN_STATUSES, customStatusError, isDailyStatuses, migrateDailyStatuses, updateDailyStatus } from './daily-status'
+import { BUILTIN_STATUSES, customStatusError, migrateDailyStatuses, updateDailyStatus } from './daily-status'
 import type { DailyStatus, DailyStatuses, StatusDefinition } from './daily-status'
-import { isShiftStatusConfiguration, shiftAppearance } from './shift-status'
+import { shiftAppearance } from './shift-status'
+import { parseScheduleData } from './schedule-data'
+import type { ScheduleData } from './schedule-data'
+import type { ShiftRequest } from './cloud/client'
 import StatusSettings, { StatusBadge, StatusCreator } from './StatusSettings'
 import WorkerWeekTable from './WorkerWeekTable'
-import './App.css'
 
 type Tab = 'schedule' | 'workers' | 'shifts'
 
@@ -117,23 +120,46 @@ function shiftPeriod(shift: ShiftTemplate) {
   return `${DAY_NAMES[shift.grouping.startDay]} ${shift.start} — ${DAY_NAMES[shift.grouping.endDay]} ${shift.end}`
 }
 
-function App() {
+export type CloudSchedule = {
+  data: ScheduleData
+  onChange: Dispatch<SetStateAction<ScheduleData>>
+  canEdit: boolean
+  requests: ShiftRequest[]
+  renderRequests: (week: string) => ReactNode
+}
+
+function App({ cloud }: { cloud?: CloudSchedule }) {
+  const isCloud = Boolean(cloud)
+  const canEdit = cloud?.canEdit ?? true
   const stored = useMemo(() => {
+    if (isCloud) return null
     try {
       return JSON.parse(localStorage.getItem(STORAGE_KEY) ?? 'null')
     } catch {
       return null
     }
-  }, [])
+  }, [isCloud])
 
-  const [workers, setWorkers] = useState<Worker[]>(stored?.workers ?? initialWorkers)
-  const [shifts, setShifts] = useState<ShiftTemplate[]>(stored?.shifts ?? initialShifts)
-  const [assignments, setAssignments] = useState<AssignmentsByWeek>(stored?.assignments ?? {})
-  const [lockedSlots, setLockedSlots] = useState<LockedSlotsByWeek>(
-    stored?.lockedSlots ?? protectExistingAssignments(stored?.assignments ?? {}),
-  )
-  const [dailyStatuses, setDailyStatuses] = useState<DailyStatuses>(() => migrateDailyStatuses(stored?.dailyStatuses ?? {}))
-  const [customStatuses, setCustomStatuses] = useState<StatusDefinition[]>(stored?.customStatuses ?? [])
+  const [localData, setLocalData] = useState<ScheduleData>(() => ({
+    workers: stored?.workers ?? initialWorkers,
+    shifts: stored?.shifts ?? initialShifts,
+    assignments: stored?.assignments ?? {},
+    lockedSlots: stored?.lockedSlots ?? protectExistingAssignments(stored?.assignments ?? {}),
+    dailyStatuses: migrateDailyStatuses(stored?.dailyStatuses ?? {}),
+    customStatuses: stored?.customStatuses ?? [],
+  }))
+  const { workers, shifts, assignments, lockedSlots, dailyStatuses, customStatuses } = cloud?.data ?? localData
+  function updateData<K extends keyof ScheduleData>(field: K, update: SetStateAction<ScheduleData[K]>) {
+    if (!canEdit) return
+    const change = cloud?.onChange ?? setLocalData
+    change((current) => ({ ...current, [field]: typeof update === 'function' ? update(current[field]) : update }))
+  }
+  const setWorkers = (update: SetStateAction<Worker[]>) => updateData('workers', update)
+  const setShifts = (update: SetStateAction<ShiftTemplate[]>) => updateData('shifts', update)
+  const setAssignments = (update: SetStateAction<AssignmentsByWeek>) => updateData('assignments', update)
+  const setLockedSlots = (update: SetStateAction<LockedSlotsByWeek>) => updateData('lockedSlots', update)
+  const setDailyStatuses = (update: SetStateAction<DailyStatuses>) => updateData('dailyStatuses', update)
+  const setCustomStatuses = (update: SetStateAction<StatusDefinition[]>) => updateData('customStatuses', update)
   const [scheduleView, setScheduleView] = useState<'matrix' | 'cards'>('matrix')
   const weekGesture = useRef({ x: 0, lastMove: 0, wheel: 0 })
   const [weekStart, setWeekStart] = useState(toDateKey(getSunday()))
@@ -149,13 +175,14 @@ function App() {
   const displayedOccurrences = visibleOccurrences(weekStart, shifts, assignments)
 
   useEffect(() => {
+    if (isCloud) return
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify({ workers, shifts, assignments, lockedSlots, dailyStatuses, customStatuses }))
     } catch {
       // eslint-disable-next-line react/set-state-in-effect -- Report a failure while synchronizing browser storage.
       setError('לא ניתן לשמור בדפדפן. ייצא גיבוי לפני סגירת החלון כדי לא לאבד שינויים.')
     }
-  }, [workers, shifts, assignments, lockedSlots, dailyStatuses, customStatuses])
+  }, [workers, shifts, assignments, lockedSlots, dailyStatuses, customStatuses, isCloud])
 
   useEffect(() => {
     if (!notice && !error) return
@@ -204,6 +231,10 @@ function App() {
   }
 
   function saveDailyStatus(date: string, workerId: string, status: DailyStatus | null) {
+    if (!canEdit) return 'רק מנהלים יכולים לערוך את הסידור.'
+    if (cloud?.requests.some((request) => request.status === 'approved' && request.request_date === date && request.worker_id === workerId)) {
+      return 'סטטוס זה נוצר מבקשה מאושרת ואינו ניתן לשינוי.'
+    }
     if (status?.blocksShifts) {
       const conflicting = Object.keys(assignments).flatMap((week) => weekOccurrences(week, shifts))
         .filter((item) => assignments[item.week]?.[item.key]?.includes(workerId) && coveredDates(item).includes(date))
@@ -420,29 +451,13 @@ function App() {
   }
 
   function importData(file: File) {
+    if (!canEdit) return
     const reader = new FileReader()
     reader.onload = () => {
       try {
-        const data = JSON.parse(String(reader.result))
-        if (!Array.isArray(data.workers) || !Array.isArray(data.shifts) || !data.assignments) {
-          throw new Error('Invalid data')
-        }
-        if (!data.shifts.every((shift: ShiftTemplate) =>
-          shift.eligibleWorkerIds === undefined ||
-          (Array.isArray(shift.eligibleWorkerIds) && shift.eligibleWorkerIds.every((id) => typeof id === 'string')),
-        )) throw new Error('Invalid eligible workers')
-        if (data.lockedSlots !== undefined && (
-          !data.lockedSlots || typeof data.lockedSlots !== 'object' || Array.isArray(data.lockedSlots) ||
-          !Object.values(data.lockedSlots).every((keys) => Array.isArray(keys) && keys.every((key) => typeof key === 'string'))
-        )) throw new Error('Invalid locked slots')
-        if (data.dailyStatuses !== undefined && !isDailyStatuses(data.dailyStatuses)) throw new Error('Invalid daily statuses')
-        if (!isShiftStatusConfiguration(data.shifts, data.customStatuses)) throw new Error('Invalid shift statuses')
-        setWorkers(data.workers)
-        setShifts(data.shifts)
-        setAssignments(data.assignments)
-        setLockedSlots(data.lockedSlots ?? protectExistingAssignments(data.assignments))
-        setDailyStatuses(migrateDailyStatuses(data.dailyStatuses ?? {}))
-        setCustomStatuses(data.customStatuses ?? [])
+        const data = parseScheduleData(JSON.parse(String(reader.result)))
+        if (cloud) cloud.onChange(data)
+        else setLocalData(data)
         setNotice('הנתונים יובאו בהצלחה')
       } catch {
         setError('הקובץ אינו קובץ גיבוי תקין')
@@ -474,14 +489,14 @@ function App() {
           <button className={tab === 'schedule' ? 'active' : ''} onClick={() => setTab('schedule')}>
             לוח משמרות
           </button>
-          <button className={tab === 'workers' ? 'active' : ''} onClick={() => setTab('workers')}>
+          {canEdit && <button className={tab === 'workers' ? 'active' : ''} onClick={() => setTab('workers')}>
             עובדים
-          </button>
-          <button className={tab === 'shifts' ? 'active' : ''} onClick={() => setTab('shifts')}>
+          </button>}
+          {canEdit && <button className={tab === 'shifts' ? 'active' : ''} onClick={() => setTab('shifts')}>
             הגדרות משמרות
-          </button>
+          </button>}
         </nav>
-        <div className="header-actions">
+        {canEdit && <div className="header-actions">
           <button className="button ghost small" onClick={exportData}>ייצוא גיבוי</button>
           <button className="button ghost small" onClick={() => importRef.current?.click()}>ייבוא</button>
           <input
@@ -495,11 +510,11 @@ function App() {
               event.target.value = ''
             }}
           />
-        </div>
+        </div>}
       </header>
 
       <main>
-        {tab === 'schedule' && (
+        {(tab === 'schedule' || !canEdit) && (
           <>
             <section className="page-heading">
               <div>
@@ -507,11 +522,11 @@ function App() {
                 <h1>לוח המשמרות</h1>
                 <p>שיבוץ אוטומטי לפי זמינות, העדפות ומכסת משמרות.</p>
               </div>
-              <div className="heading-actions">
+              {canEdit && <div className="heading-actions">
                 <button className="button secondary" onClick={unlockWeek}>שחרור שבוע לאוטומטי</button>
                 <button className="button secondary" onClick={clearWeek}>ניקוי שבוע</button>
                 <button className="button primary" onClick={generateSchedule}>יצירת סידור אוטומטי</button>
-              </div>
+              </div>}
             </section>
 
             <section className="stats">
@@ -558,6 +573,7 @@ function App() {
               <button className="button secondary" onClick={() => setWeekStart(toDateKey(getSunday()))}>השבוע הנוכחי</button>
             </section>
 
+            {cloud?.renderRequests(weekStart)}
             <div className="view-toggle" aria-label="תצוגת לוח">
               <button className={`button secondary ${scheduleView === 'matrix' ? 'selected' : ''}`} aria-pressed={scheduleView === 'matrix'} onClick={() => setScheduleView('matrix')}>טבלת עובדים</button>
               <button className={`button secondary ${scheduleView === 'cards' ? 'selected' : ''}`} aria-pressed={scheduleView === 'cards'} onClick={() => setScheduleView('cards')}>כרטיסי משמרות</button>
@@ -575,6 +591,7 @@ function App() {
             {scheduleView === 'matrix' ? <WorkerWeekTable key={weekStart} week={weekStart} dates={weekDays.map(toDateKey)}
               workers={workers} shifts={shifts} assignments={assignments} locks={lockedSlots} statuses={dailyStatuses}
               customStatuses={customStatuses}
+              canEdit={canEdit}
               onSaveStatus={saveDailyStatus} onAssign={assignWorker} onUnassign={unassignWorker} onLock={setSlotLock}
             /> : <section className="schedule-grid">
               {weekDays.map((date, index) => {
@@ -611,11 +628,11 @@ function App() {
                             {shift.grouping && <p className="shift-period">{shiftPeriod(shift)}</p>}
                             <StatusBadge status={shiftAppearance(shift, customStatuses)} />
                             {shift.eligibleWorkerIds !== undefined && <p className="shift-period">עובדים נבחרים בלבד</p>}
-                            <button
+                            {canEdit && <button
                               className={`slot-lock ${locked ? 'locked' : ''}`}
                               aria-pressed={locked}
                               onClick={() => setSlotLock(occurrence, !locked)}
-                            >{locked ? 'מוגן · שחרור לאוטומטי' : 'נעילת המשמרת לאוטומטי'}</button>
+                            >{locked ? 'מוגן · שחרור לאוטומטי' : 'נעילת המשמרת לאוטומטי'}</button>}
                             {(shift.grouping || continuation) && (
                               <p className="shift-continuation">
                                 {continuation
@@ -632,15 +649,15 @@ function App() {
                                   <div className="assigned-worker" key={workerId}>
                                     <span className="avatar">{worker.name.charAt(0)}</span>
                                     <div><strong>{worker.name}</strong><small>{worker.role}</small></div>
-                                    <button
+                                    {canEdit && <button
                                       onClick={() => unassignWorker(occurrence, workerId)}
                                       aria-label={`הסרת ${worker.name}`}
-                                    >×</button>
+                                    >×</button>}
                                   </div>
                                 )
                               })}
                             </div>
-                            {openSpots > 0 && (
+                            {canEdit && openSpots > 0 && (
                               <select
                                 value=""
                                 disabled={selectableWorkers.length === 0}
@@ -667,7 +684,7 @@ function App() {
           </>
         )}
 
-        {tab === 'workers' && (
+        {canEdit && tab === 'workers' && (
           <>
             <section className="page-heading">
               <div>
@@ -723,7 +740,7 @@ function App() {
           </>
         )}
 
-        {tab === 'shifts' && (
+        {canEdit && tab === 'shifts' && (
           <>
             <section className="page-heading">
               <div>
@@ -792,14 +809,14 @@ function App() {
       </main>
 
       {(notice || error) && <div role={error ? 'alert' : 'status'} className={`toast ${error ? 'error' : ''}`}>{error || notice}</div>}
-      {editingWorker && (
+      {canEdit && editingWorker && (
         <WorkerModal
           worker={editingWorker}
           onSave={saveWorker}
           onClose={() => setEditingWorker(null)}
         />
       )}
-      {editingShift && (
+      {canEdit && editingShift && (
         <ShiftModal
           shift={editingShift}
           workers={workers}
