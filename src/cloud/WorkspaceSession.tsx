@@ -101,6 +101,22 @@ export default function WorkspaceSession({ client, workspaceId, userId, onBack, 
     finally { busyRef.current = false; setBusy(false) }
   }
 
+  async function deleteWorkspace() {
+    if (!model || !manager || busyRef.current) return
+    const confirmed = window.confirm(`למחוק את סביבת העבודה "${model.name}"?\n\nהסידור, החברים, ההזמנות והבקשות יימחקו לצמיתות. לא ניתן לבטל פעולה זו.`)
+    if (!confirmed) return
+    busyRef.current = true; sequence.current++; setBusy(true); setError(''); setNotice('')
+    try {
+      const result = await client.rpc('sm_delete_workspace', { p_workspace: workspaceId })
+      if (result.error) throw result.error
+      onBack()
+    } catch (error) {
+      setError(cloudError(error))
+      busyRef.current = false
+      setBusy(false)
+    }
+  }
+
   function canLeave() { return !dirty || window.confirm('יש שינויים שלא נשמרו בסביבה. להמשיך ולאבד אותם?') }
   return <div dir="rtl">
     <header className="workspace-bar">
@@ -147,6 +163,11 @@ export default function WorkspaceSession({ client, workspaceId, userId, onBack, 
               if (result.error) throw result.error
             }, 'קישור ההזמנה בוטל.')}>ביטול קישור</button>
           </div>)}
+        <div className="workspace-danger">
+          <h2>מחיקת סביבת העבודה</h2>
+          <p>המחיקה מסירה לצמיתות את הסידור, החברים, ההזמנות והבקשות של סביבה זו.</p>
+          <button className="button danger" disabled={busy} onClick={deleteWorkspace}>מחיקת סביבת העבודה</button>
+        </div>
       </section>}
       <fieldset disabled={busy} className="cloud-fields cloud-schedule">
         <App cloud={{

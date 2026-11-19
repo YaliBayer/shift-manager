@@ -36,7 +36,7 @@ test('workspace RPCs enforce identity, roles, invitations, concurrency and appro
       grant execute on function auth.uid(), auth.jwt() to anon, authenticated;
       insert into auth.users values ('${manager}'), ('${employee}'), ('${outsider}');
     `)
-    for (const name of ['202611190001_workspaces.sql', '202611190002_constraint_privacy.sql']) {
+    for (const name of ['202611190001_workspaces.sql', '202611190002_constraint_privacy.sql', '202611190003_delete_workspace.sql']) {
       const migration = await readFile(new URL(`../supabase/migrations/${name}`, import.meta.url), 'utf8')
       try { await db.exec(migration) } catch (error) {
         const line = migration.slice(0, Number(error.position)).split('\n').length
@@ -293,6 +293,20 @@ test('workspace RPCs enforce identity, roles, invitations, concurrency and appro
       await assert.rejects(() => scalar('select public.sm_revoke_request_approval($1,$2) as result', [monday, revision]), /REQUEST_STATUS_CHANGED/)
       assert.equal((await state()).data.dailyStatuses['2026-11-16'].a.note, 'Keep')
       assert.equal((await db.query('select status from public.sm_requests where id = $1', [monday])).rows[0].status, 'approved')
+    })
+    await t.test('only managers can delete a workspace and related records are removed', async () => {
+      await login(manager)
+      const disposable = await scalar("select public.sm_create_workspace('Disposable') as result")
+      const invite = await scalar('select public.sm_create_invite($1) as result', [disposable])
+      await login(employee)
+      await scalar('select public.sm_join_workspace($1) as result', [invite.token])
+      await assert.rejects(() => scalar('select public.sm_delete_workspace($1) as result', [disposable]), /MANAGER_REQUIRED/)
+      await login(manager)
+      await scalar('select public.sm_delete_workspace($1) as result', [disposable])
+      await db.exec('reset role')
+      assert.equal(await scalar('select count(*)::integer as result from public.sm_workspaces where id = $1', [disposable]), 0)
+      assert.equal(await scalar('select count(*)::integer as result from public.sm_members where workspace_id = $1', [disposable]), 0)
+      assert.equal(await scalar('select count(*)::integer as result from public.sm_invites where workspace_id = $1', [disposable]), 0)
     })
   } finally { await db.close() }
 })

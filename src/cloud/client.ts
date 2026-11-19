@@ -32,6 +32,7 @@ type Database = {
     Functions: {
       sm_get_workspace: { Args: { p_workspace: string }; Returns: WorkspaceRow }
       sm_create_workspace: { Args: { p_name: string }; Returns: string }
+      sm_delete_workspace: { Args: { p_workspace: string }; Returns: undefined }
       sm_create_invite: { Args: { p_workspace: string }; Returns: Invite }
       sm_revoke_invite: { Args: { p_workspace: string; p_invite: string }; Returns: undefined }
       sm_join_workspace: { Args: { p_token: string }; Returns: string }
@@ -68,6 +69,7 @@ const errors: Record<string, string> = {
   REQUEST_ALREADY_DECIDED: 'הבקשה כבר טופלה. רענן את הרשימה.',
   UNKNOWN_WORKER: 'העובד אינו קיים בסידור השמור. שמור את העובד או עדכן את קישור החשבון.',
   LAST_MANAGER: 'לא ניתן להסיר את הרשאת המנהל האחרון בסביבה.',
+  WORKSPACE_NOT_FOUND: 'סביבת העבודה כבר אינה קיימת.',
   MEMBERSHIP_REQUIRED: 'אין לך הרשאה לסביבה זו.',
   REQUEST_NOT_APPROVED_CONSTRAINT: 'ניתן לבטל אישור רק של בקשת אילוץ מאושרת. רענן את הרשימה.',
   REQUEST_STATUS_CHANGED: 'הסטטוס בתאריך השתנה ואינו שייך לאישור זה. לא הוסר מידע; יש לבדוק את התא.',

@@ -1,10 +1,10 @@
 .status-settings { padding: 22px; margin-top: 20px; }
 .status-settings h2 { font-size: 19px; margin: 0 0 8px; }
-.status-settings > p { font-size: 13px; color: var(--muted); }
+.status-settings > p { font-size: 15px; color: var(--muted); }
 .status-creator { margin: 16px 0; padding: 14px; border: 1px solid var(--border); border-radius: 8px; }
-.status-creator legend { font-size: 13px; font-weight: 700; }
+.status-creator legend { font-size: 15px; font-weight: 700; }
 .status-creator input[type=color] { padding: 4px; height: 43px; }
 .status-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
-.status-chip { display: inline-block; padding: 4px 10px; border-radius: 5px; font-size: 12px; font-weight: 600; }
+.status-chip { display: inline-block; padding: 4px 10px; border-radius: 5px; font-size: 14px; font-weight: 600; }
 .shift-status-picker { margin: 16px 0; }
-.shift-status-picker summary { cursor: pointer; margin-top: 10px; font-size: 13px; }
+.shift-status-picker summary { cursor: pointer; margin-top: 10px; font-size: 15px; }
