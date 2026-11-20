@@ -36,7 +36,7 @@ test('workspace RPCs enforce identity, roles, invitations, concurrency and appro
       grant execute on function auth.uid(), auth.jwt() to anon, authenticated;
       insert into auth.users values ('${manager}'), ('${employee}'), ('${outsider}');
     `)
-    for (const name of ['202611190001_workspaces.sql', '202611190002_constraint_privacy.sql', '202611190003_delete_workspace.sql']) {
+    for (const name of ['202611190001_workspaces.sql', '202611190002_constraint_privacy.sql', '202611190003_delete_workspace.sql', '202611200001_week_publishing.sql']) {
       const migration = await readFile(new URL(`../supabase/migrations/${name}`, import.meta.url), 'utf8')
       try { await db.exec(migration) } catch (error) {
         const line = migration.slice(0, Number(error.position)).split('\n').length
@@ -84,7 +84,10 @@ test('workspace RPCs enforce identity, roles, invitations, concurrency and appro
       assert.equal(await scalar('select public.sm_join_workspace($1) as result', [invitation.token]), workspace)
       assert.equal(await scalar('select public.sm_join_workspace($1) as result', [invitation.token]), workspace)
       assert.equal(await scalar('select public.sm_role($1) as result', [workspace]), 'member')
-      assert.deepEqual((await state()).data, initial)
+      const hidden = await state()
+      assert.deepEqual(hidden.data.assignments, {})
+      assert.deepEqual(hidden.data.lockedSlots, {})
+      assert.deepEqual(hidden.publishedWeeks, [])
       await assert.rejects(() => db.query('select data from public.sm_workspaces where id = $1', [workspace]), /permission denied/)
       await assert.rejects(() => db.query('select to_jsonb(w) from public.sm_workspaces w where id = $1', [workspace]), /permission denied/)
       await assert.rejects(() => save(initial, 1), /MANAGER_REQUIRED/)
@@ -93,6 +96,30 @@ test('workspace RPCs enforce identity, roles, invitations, concurrency and appro
       await assert.rejects(() => scalar('select public.sm_update_member($1,$2,$3,$4) as result', [workspace, employee, 'manager', 'b']), /MANAGER_REQUIRED/)
       assert.equal((await db.query('select * from public.sm_invites')).rows.length, 0)
       assert.equal((await db.query('select * from public.sm_members')).rows.length, 1)
+    })
+    await t.test('managers publish saved weekly snapshots without exposing later draft edits', async () => {
+      await login(employee)
+      await assert.rejects(() => scalar('select public.sm_publish_week($1,$2,$3) as result', [workspace, week, 1]), /MANAGER_REQUIRED/)
+      await login(manager)
+      const before = await state()
+      const published = await scalar('select public.sm_publish_week($1,$2,$3) as result', [workspace, week, before.revision])
+      assert.deepEqual(published.publishedWeeks, [week])
+      await login(employee)
+      assert.deepEqual((await state()).data.assignments, initial.assignments)
+      await login(manager)
+      const changed = (await state()).data
+      changed.assignments[week]['0:night'] = []
+      await save(changed)
+      await login(employee)
+      assert.deepEqual((await state()).data.assignments, initial.assignments)
+      await login(manager)
+      const saved = await state()
+      await scalar('select public.sm_publish_week($1,$2,$3) as result', [workspace, week, saved.revision])
+      await login(employee)
+      assert.deepEqual((await state()).data.assignments[week]['0:night'], [])
+      await login(manager)
+      changed.assignments[week]['0:night'] = ['a']
+      await save(changed)
     })
     await t.test('manager links accounts, cannot remove last manager or link two accounts to one worker', async () => {
       await assert.rejects(() => submit('2026-11-16'), /WORKER_LINK_REQUIRED/)

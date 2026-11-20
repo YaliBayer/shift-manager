@@ -18,7 +18,7 @@ export type ShiftRequest = {
   decision_note: string; decided_by: string | null; created_at: string; decided_at: string | null
 }
 type Json = string | number | boolean | null | Json[] | { [key: string]: Json | undefined }
-type WorkspaceRow = { id: string; name: string; data: Json; revision: number; created_at: string }
+type WorkspaceRow = { id: string; name: string; data: Json; revision: number; created_at: string; publishedWeeks: string[] }
 type Table<T> = { Row: T; Insert: never; Update: never; Relationships: [] }
 type Database = {
   public: {
@@ -38,6 +38,7 @@ type Database = {
       sm_join_workspace: { Args: { p_token: string }; Returns: string }
       sm_update_member: { Args: { p_workspace: string; p_user: string; p_role: Role; p_worker: string | null }; Returns: undefined }
       sm_save_workspace: { Args: { p_workspace: string; p_revision: number; p_data: ScheduleData }; Returns: WorkspaceRow }
+      sm_publish_week: { Args: { p_workspace: string; p_week: string; p_revision: number }; Returns: WorkspaceRow }
       sm_submit_request: { Args: { p_workspace: string; p_date: string; p_kind: ShiftRequest['kind']; p_reason: string }; Returns: string }
       sm_decide_request: { Args: { p_request: string; p_decision: 'approved' | 'denied'; p_note: string; p_revision: number }; Returns: undefined }
       sm_revoke_request_approval: { Args: { p_request: string; p_revision: number }; Returns: undefined }
@@ -73,11 +74,21 @@ const errors: Record<string, string> = {
   MEMBERSHIP_REQUIRED: 'אין לך הרשאה לסביבה זו.',
   REQUEST_NOT_APPROVED_CONSTRAINT: 'ניתן לבטל אישור רק של בקשת אילוץ מאושרת. רענן את הרשימה.',
   REQUEST_STATUS_CHANGED: 'הסטטוס בתאריך השתנה ואינו שייך לאישור זה. לא הוסר מידע; יש לבדוק את התא.',
+  INVALID_WEEK: 'ניתן לפרסם רק שבוע שמתחיל ביום ראשון.',
 }
 
 export function cloudError(error: unknown): string {
   const message = error && typeof error === 'object' && 'message' in error ? String(error.message) : String(error)
   for (const [code, text] of Object.entries(errors)) if (message.includes(code)) return text
+  if (message.toLowerCase().includes('email rate limit exceeded')) {
+    return 'נשלחו יותר מדי הודעות אימות בזמן קצר. יש להמתין ולנסות שוב, או להגדיר ספק SMTP ב־Supabase.'
+  }
+  if (message.includes('sm_delete_workspace') && message.includes('schema cache')) {
+    return 'פונקציית המחיקה עדיין לא הותקנה ב־Supabase. יש להריץ את קובץ ההגירה 202611190003_delete_workspace.sql.'
+  }
+  if ((message.includes('sm_publish_week') || message.includes('publishedWeeks')) && message.includes('schema cache')) {
+    return 'פרסום שבועי עדיין לא הותקן ב־Supabase. יש להריץ את קובץ ההגירה 202611200001_week_publishing.sql.'
+  }
   if (message.includes('sm_active_request')) return 'כבר קיימת בקשה ממתינה או מאושרת לתאריך זה.'
   if (message.includes('sm_members_workspace_id_worker_id_key')) return 'העובד כבר מקושר לחשבון אחר.'
   return `הפעולה נכשלה: ${message}`

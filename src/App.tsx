@@ -124,6 +124,7 @@ export type CloudSchedule = {
   data: ScheduleData
   onChange: Dispatch<SetStateAction<ScheduleData>>
   canEdit: boolean
+  publishedWeeks: string[]
   requests: ShiftRequest[]
   renderRequests: (week: string) => ReactNode
 }
@@ -171,6 +172,7 @@ function App({ cloud }: { cloud?: CloudSchedule }) {
   const importRef = useRef<HTMLInputElement>(null)
 
   const weekDays = useMemo(() => getWeekDays(weekStart), [weekStart])
+  const canViewWeek = !cloud || canEdit || cloud.publishedWeeks.includes(weekStart)
   const currentAssignments = assignments[weekStart] ?? {}
   const displayedOccurrences = visibleOccurrences(weekStart, shifts, assignments)
 
@@ -574,6 +576,7 @@ function App({ cloud }: { cloud?: CloudSchedule }) {
             </section>
 
             {cloud?.renderRequests(weekStart)}
+            {canViewWeek && <>
             <div className="view-toggle" aria-label="תצוגת לוח">
               <button className={`button secondary ${scheduleView === 'matrix' ? 'selected' : ''}`} aria-pressed={scheduleView === 'matrix'} onClick={() => setScheduleView('matrix')}>טבלת עובדים</button>
               <button className={`button secondary ${scheduleView === 'cards' ? 'selected' : ''}`} aria-pressed={scheduleView === 'cards'} onClick={() => setScheduleView('cards')}>כרטיסי משמרות</button>
@@ -681,6 +684,7 @@ function App({ cloud }: { cloud?: CloudSchedule }) {
                 )
               })}
             </section>}
+            </>}
           </>
         )}
 

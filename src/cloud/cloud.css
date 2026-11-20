@@ -29,6 +29,10 @@
 .workspace-danger { margin-top: 28px; padding-top: 8px; border-top: 1px solid #efc7c7; }
 .button.danger { border-color: #d04444; background: white; color: #b52f2f; }
 .button.danger:hover { background: #fff0f0; }
+.week-publication { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; padding: 14px 20px; border: 1px solid #e4c57c; border-radius: 9px; background: #fff8e5; }
+.week-publication.published { border-color: #79c6b2; background: #eaf8f4; }
+.week-publication strong, .week-publication span { display: block; }
+.week-publication span { margin-top: 4px; color: #56637a; font-size: 14px; }
 .requests-panel { padding: 16px 20px; margin-bottom: 18px; }
 .requests-panel summary { cursor: pointer; font-weight: 700; }
 .requests-panel > p { font-size: 15px; line-height: 1.7; margin: 14px 0; }

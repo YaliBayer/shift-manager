@@ -10,7 +10,7 @@ import RequestsPanel from './RequestsPanel'
 type Snapshot = { data: ScheduleData; revision: number }
 type Model = {
   name: string; snapshot: Snapshot; draft: ScheduleData; latestRevision: number
-  members: Member[]; requests: ShiftRequest[]; invites: Invite[]
+  members: Member[]; requests: ShiftRequest[]; invites: Invite[]; publishedWeeks: string[]
 }
 const hasChanges = (model: Model) => JSON.stringify(model.draft) !== JSON.stringify(model.snapshot.data)
 
@@ -47,6 +47,7 @@ export default function WorkspaceSession({ client, workspaceId, userId, onBack, 
       name: workspace.data.name, snapshot: { data, revision: workspace.data.revision }, draft: data,
       latestRevision: workspace.data.revision, members: members.data, requests: requests.data,
       invites: invites.data.filter((invite) => !invite.revoked && new Date(invite.expires_at).getTime() > Date.now()),
+      publishedWeeks: workspace.data.publishedWeeks ?? [],
     }
     setModel((current) => current && hasChanges(current) && !discard && ownMembership.role === 'manager'
       ? { ...next, snapshot: current.snapshot, draft: current.draft }
@@ -96,7 +97,7 @@ export default function WorkspaceSession({ client, workspaceId, userId, onBack, 
       const data = parseScheduleData(result.data.data)
       setModel((current) => current ? { ...current, snapshot: { data, revision: result.data.revision },
         draft: data, latestRevision: result.data.revision } : current)
-      setNotice('הסידור נשמר בסביבה וזמין לחברים.')
+      setNotice('הטיוטה נשמרה למנהלים. עובדים יראו שבוע רק לאחר פרסומו.')
     } catch (error) { setError(cloudError(error)) }
     finally { busyRef.current = false; setBusy(false) }
   }
@@ -117,12 +118,26 @@ export default function WorkspaceSession({ client, workspaceId, userId, onBack, 
     }
   }
 
+  function publishWeek(week: string) {
+    if (!model || !manager || dirty || busyRef.current) return
+    const alreadyPublished = model.publishedWeeks.includes(week)
+    if (!window.confirm(alreadyPublished
+      ? 'לפרסם מחדש את השבוע? העובדים יראו את השיבוץ השמור הנוכחי במקום הגרסה הקודמת.'
+      : 'לפרסם את השבוע לעובדים? לאחר הפרסום הם יוכלו לראות את השיבוצים שלו.')) return
+    perform(async () => {
+      const result = await client.rpc('sm_publish_week', {
+        p_workspace: workspaceId, p_week: week, p_revision: model.snapshot.revision,
+      })
+      if (result.error) throw result.error
+    }, alreadyPublished ? 'השבוע פורסם מחדש לעובדים.' : 'השבוע פורסם לעובדים.')
+  }
+
   function canLeave() { return !dirty || window.confirm('יש שינויים שלא נשמרו בסביבה. להמשיך ולאבד אותם?') }
   return <div dir="rtl">
     <header className="workspace-bar">
       <div><strong>{model?.name ?? 'סביבת עבודה'}</strong><small>{manager ? 'מנהל — עריכה ופרסום' : 'חבר — צפייה ושליחת בקשות'}</small></div>
       <div className="cloud-actions">
-        {manager && <button className="button primary" disabled={!dirty || busy} onClick={save}>שמירת שינויים לסביבה</button>}
+        {manager && <button className="button primary" disabled={!dirty || busy} onClick={save}>שמירת טיוטה</button>}
         {manager && <button className="button secondary" onClick={() => setShowSettings(!showSettings)}>חברים והזמנות</button>}
         <button className="button secondary" disabled={busy} onClick={() => {
           if (canLeave()) perform(async () => {}, 'הנתונים נטענו מחדש.', true)
@@ -132,7 +147,7 @@ export default function WorkspaceSession({ client, workspaceId, userId, onBack, 
       </div>
     </header>
     <div className="cloud-sync">
-      {dirty ? <strong>שינויים מקומיים שטרם פורסמו — לחץ על ״שמירת שינויים לסביבה״ כדי לשתף אותם.</strong> : <span>מוצג הסידור השמור. עדכונים נבדקים כל 15 שניות ובחזרה לחלון.</span>}
+      {dirty ? <strong>שינויים מקומיים שטרם נשמרו — שמור את הטיוטה לפני פרסום שבוע.</strong> : <span>{manager ? 'מוצגת טיוטת המנהלים השמורה.' : 'מוצגים רק שבועות שמנהל פרסם.'} עדכונים נבדקים כל 15 שניות ובחזרה לחלון.</span>}
       {model && model.latestRevision !== model.snapshot.revision && <p role="alert">יש גרסה חדשה ממנהל אחר. ייצא את הטיוטה אם צריך וטען מחדש לפני שמירה.</p>}
       {busy && <p role="status">שומר / מעדכן…</p>}
       {error && <p role="alert" className="validation-message">{error}</p>}
@@ -171,21 +186,34 @@ export default function WorkspaceSession({ client, workspaceId, userId, onBack, 
       </section>}
       <fieldset disabled={busy} className="cloud-fields cloud-schedule">
         <App cloud={{
-          data: model.draft, onChange: change, canEdit: manager, requests: model.requests,
-          renderRequests: (week) => <RequestsPanel key={`requests:${week}`} week={week} member={me} requests={model.requests}
-            data={model.snapshot.data} dirty={dirty} busy={busy}
-            onSubmit={(date, kind, reason) => perform(async () => {
-              const result = await client.rpc('sm_submit_request', { p_workspace: workspaceId, p_date: date, p_kind: kind, p_reason: reason })
-              if (result.error) throw result.error
-            }, 'הבקשה נשלחה למנהלים. עד לאישור היא אינה משנה את השיבוץ.')}
-            onDecide={(id, decision, note) => perform(async () => {
-              const result = await client.rpc('sm_decide_request', { p_request: id, p_decision: decision, p_note: note, p_revision: model.snapshot.revision })
-              if (result.error) throw result.error
-            }, decision === 'approved' ? 'הבקשה אושרה והתאריך חסום לשיבוץ.' : 'הבקשה נדחתה; הסידור לא השתנה.')}
-            onRevoke={(id) => perform(async () => {
-              const result = await client.rpc('sm_revoke_request_approval', { p_request: id, p_revision: model.snapshot.revision })
-              if (result.error) throw result.error
-            }, 'האישור בוטל והבקשה חזרה להמתנה. החסימה הוסרה; השיבוצים והנעילות לא שונו.')} />,
+          data: model.draft, onChange: change, canEdit: manager, publishedWeeks: model.publishedWeeks, requests: model.requests,
+          renderRequests: (week) => <div key={`week-tools:${week}`}>
+            <section className={`week-publication ${model.publishedWeeks.includes(week) ? 'published' : ''}`}>
+              <div>
+                <strong>{model.publishedWeeks.includes(week) ? 'השבוע פורסם לעובדים' : 'השבוע עדיין לא פורסם לעובדים'}</strong>
+                <span>{manager
+                  ? dirty ? 'יש לשמור את הטיוטה לפני פרסום.' : 'הפרסום מעתיק לעובדים את השיבוץ השמור של שבוע זה בלבד.'
+                  : 'השיבוצים יופיעו כאן לאחר שמנהל יפרסם את השבוע.'}</span>
+              </div>
+              {manager && <button className="button primary" disabled={dirty || busy} onClick={() => publishWeek(week)}>
+                {model.publishedWeeks.includes(week) ? 'פרסום מחדש' : 'פרסום השבוע'}
+              </button>}
+            </section>
+            <RequestsPanel week={week} member={me} requests={model.requests}
+              data={model.snapshot.data} dirty={dirty} busy={busy}
+              onSubmit={(date, kind, reason) => perform(async () => {
+                const result = await client.rpc('sm_submit_request', { p_workspace: workspaceId, p_date: date, p_kind: kind, p_reason: reason })
+                if (result.error) throw result.error
+              }, 'הבקשה נשלחה למנהלים. עד לאישור היא אינה משנה את השיבוץ.')}
+              onDecide={(id, decision, note) => perform(async () => {
+                const result = await client.rpc('sm_decide_request', { p_request: id, p_decision: decision, p_note: note, p_revision: model.snapshot.revision })
+                if (result.error) throw result.error
+              }, decision === 'approved' ? 'הבקשה אושרה והתאריך חסום לשיבוץ.' : 'הבקשה נדחתה; הסידור לא השתנה.')}
+              onRevoke={(id) => perform(async () => {
+                const result = await client.rpc('sm_revoke_request_approval', { p_request: id, p_revision: model.snapshot.revision })
+                if (result.error) throw result.error
+              }, 'האישור בוטל והבקשה חזרה להמתנה. החסימה הוסרה; השיבוצים והנעילות לא שונו.')} />
+          </div>,
         }} />
       </fieldset>
     </>}
