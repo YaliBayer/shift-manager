@@ -59,9 +59,9 @@ npm run build
 Vercel continues to host the Vite frontend. Supabase provides PostgreSQL and Auth;
 no separate application server or private database key is needed in Vercel.
 
-1. Create a Supabase project. In its SQL Editor, run
-   `supabase\migrations\202611190001_workspaces.sql` **once**, followed by
-   `supabase\migrations\202611190002_constraint_privacy.sql`. This creates the
+1. Create a Supabase project. In its SQL Editor, run the **contents** of each SQL
+   file in `supabase\migrations` **once**, in filename order, from
+   `202611190001_workspaces.sql` through `202611220001_request_options.sql`. This creates the
    workspace tables, row-level access policies, and transactional RPC functions.
    The migration uses `sm_`-prefixed tables and a private helper schema.
 2. In Supabase's project connection/API settings, copy the **project URL** and
@@ -136,17 +136,19 @@ an explicit **local-only** mode.
 
 ### Upgrading an existing workspace
 
-If the original SQL migration is already installed, run only the **contents** of
-`supabase\migrations\202611190002_constraint_privacy.sql` in the Supabase SQL Editor,
+Run only migrations not yet installed, in filename order. If week publishing is
+already installed, run only the **contents** of
+`supabase\migrations\202611220001_request_options.sql` in the Supabase SQL Editor,
 then deploy the updated frontend and reload open app tabs. Do not paste the file
-path into the SQL Editor, and do not rerun the original table-creation migration.
-This upgrade preserves existing schedules and requests, adds approval cancellation,
-and replaces direct schedule reads with a caller-specific RPC for privacy.
+path into the SQL Editor or rerun previously installed migrations.
+This upgrade preserves existing schedules, requests and published weeks, and adds
+leave, day-shift, night-shift and saved custom-status requests.
 
 ### Shared scheduling and requests
 
-Managers edit a local draft and publish with **שמירת שינויים לסביבה**.
-Other members see the saved version; the app checks for updates every 15 seconds,
+Managers save a local draft with **שמירת שינויים לסביבה**, then separately publish
+each week with **פרסום השבוע**. Members see published assignments, not
+unpublished draft changes; the app checks for updates every 15 seconds,
 on window focus, and on manual reload. Unsaved drafts are not published or cached
 in browser storage; export a backup before leaving if you need to keep one.
 Version checks prevent concurrent managers from silently overwriting each other.
@@ -154,15 +156,32 @@ On a conflict, export any needed draft, reload the newer schedule, and reapply
 the intended changes.
 
 The weekly **בקשות לשבוע זה** panel follows the displayed week. Each submission
-covers one whole calendar date; submit additional requests for additional dates.
-Pending requests do not block scheduling. Managers must save any schedule changes
-before deciding requests. Approval rejects overlapping assignments and existing
-cell statuses instead of removing them silently. Approved blocks cannot be
+covers one date; submit additional requests for additional dates.
+Alongside **אילוץ** and **חג**, workers can request **חופש**, **משמרת יום**,
+**משמרת לילה**, or a saved **סטטוס מותאם**.
+Pending requests do not affect scheduling. Managers must save any schedule changes
+before deciding requests. Leave, constraints and holidays block the full calendar
+date, including overnight/grouped shifts touching it. Blocking-status approval
+rejects overlapping assignments; all status approvals reject existing cell statuses
+instead of overwriting them. Approved statuses cannot be
 removed through ordinary cell editing or backup import. Managers can use
 **ביטול אישור אילוץ** on an approved constraint to return it to pending review and
 remove only its approved block. Existing assignments, locks and unrelated statuses
 are preserved; previously removed assignments are not restored. Save any draft
 before cancelling approval. Denied requests can be submitted again.
+
+For day/night approval, the manager explicitly selects an ordinary matching shift
+starting on the requested date. Approval adds the worker to that actual shift and
+locks the slot, without replacing coworkers or changing other assignments. Capacity,
+eligibility, availability, blocking statuses, weekly limits and cross-week overlap/rest
+rules still apply. Manual-only nights are allowed, just like other manager assignments.
+Publish the week separately to share the approved assignment. Managers may later
+deliberately edit these assignments; the approved request remains decision history.
+
+Custom requests select a saved custom status, not free text. Members can choose
+definitions from the latest published snapshot. The requested label, color and
+blocking policy are captured at submission, so later definition changes cannot alter
+the request. Nonblocking custom statuses may coexist with shifts.
 
 Invitation links expire after seven days and can be revoked. Revocation prevents
 new joins; it does not remove existing members. An invitation never grants manager

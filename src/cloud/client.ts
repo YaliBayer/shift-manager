@@ -1,6 +1,8 @@
 import { createClient } from '@supabase/supabase-js'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { ScheduleData } from '../schedule-data'
+import type { RequestKind } from '../requests'
+import type { DailyStatus } from '../daily-status'
 
 export type Role = 'manager' | 'member'
 export type Member = {
@@ -14,7 +16,8 @@ export type Member = {
 export type Invite = { id: string; workspace_id: string; token: string; expires_at: string; revoked: boolean }
 export type ShiftRequest = {
   id: string; workspace_id: string; user_id: string; worker_id: string; request_date: string
-  kind: 'constraint' | 'holiday'; reason: string; status: 'pending' | 'approved' | 'denied'
+  kind: RequestKind; reason: string; status: 'pending' | 'approved' | 'denied'
+  custom_status_id: string | null; custom_status: DailyStatus | null; assigned_shift_id: string | null
   decision_note: string; decided_by: string | null; created_at: string; decided_at: string | null
 }
 type Json = string | number | boolean | null | Json[] | { [key: string]: Json | undefined }
@@ -39,8 +42,8 @@ type Database = {
       sm_update_member: { Args: { p_workspace: string; p_user: string; p_role: Role; p_worker: string | null }; Returns: undefined }
       sm_save_workspace: { Args: { p_workspace: string; p_revision: number; p_data: ScheduleData }; Returns: WorkspaceRow }
       sm_publish_week: { Args: { p_workspace: string; p_week: string; p_revision: number }; Returns: WorkspaceRow }
-      sm_submit_request: { Args: { p_workspace: string; p_date: string; p_kind: ShiftRequest['kind']; p_reason: string }; Returns: string }
-      sm_decide_request: { Args: { p_request: string; p_decision: 'approved' | 'denied'; p_note: string; p_revision: number }; Returns: undefined }
+      sm_submit_request: { Args: { p_workspace: string; p_date: string; p_kind: RequestKind; p_reason: string; p_custom_status_id?: string | null }; Returns: string }
+      sm_decide_request: { Args: { p_request: string; p_decision: 'approved' | 'denied'; p_note: string; p_revision: number; p_shift_id?: string | null }; Returns: undefined }
       sm_revoke_request_approval: { Args: { p_request: string; p_revision: number }; Returns: undefined }
     }
   }
@@ -66,7 +69,7 @@ const errors: Record<string, string> = {
   WORKER_LINK_REQUIRED: 'מנהל צריך לקשר את החשבון שלך לעובד לפני שליחת בקשות.',
   REQUEST_SHIFT_CONFLICT: 'יש משמרת שחופפת לתאריך המבוקש, כולל לילה או משמרת רצופה. הסר את השיבוץ ושמור את הסידור לפני האישור. נעילות לא הוסרו.',
   REQUEST_STATUS_CONFLICT: 'כבר קיים סטטוס בתא. הסר אותו ושמור לפני אישור הבקשה כדי לא לדרוס מידע.',
-  APPROVED_REQUEST_PROTECTED: 'לא ניתן להסיר או לשנות חסימה של בקשה מאושרת.',
+  APPROVED_REQUEST_PROTECTED: 'לא ניתן להסיר או לשנות סטטוס של בקשה מאושרת.',
   REQUEST_ALREADY_DECIDED: 'הבקשה כבר טופלה. רענן את הרשימה.',
   UNKNOWN_WORKER: 'העובד אינו קיים בסידור השמור. שמור את העובד או עדכן את קישור החשבון.',
   LAST_MANAGER: 'לא ניתן להסיר את הרשאת המנהל האחרון בסביבה.',
@@ -75,11 +78,24 @@ const errors: Record<string, string> = {
   REQUEST_NOT_APPROVED_CONSTRAINT: 'ניתן לבטל אישור רק של בקשת אילוץ מאושרת. רענן את הרשימה.',
   REQUEST_STATUS_CHANGED: 'הסטטוס בתאריך השתנה ואינו שייך לאישור זה. לא הוסר מידע; יש לבדוק את התא.',
   INVALID_WEEK: 'ניתן לפרסם רק שבוע שמתחיל ביום ראשון.',
+  INVALID_CUSTOM_STATUS: 'הסטטוס המותאם אינו זמין. רענן ובחר סטטוס שמור מהרשימה.',
+  REQUEST_SHIFT_REQUIRED: 'יש לבחור משמרת תואמת לאישור הבקשה.',
+  REQUEST_SHIFT_MISMATCH: 'המשמרת אינה תואמת לתאריך או לסוג המשמרת המבוקש.',
+  REQUEST_SHIFT_FULL: 'המשמרת כבר מלאה. לא הוסר או הוחלף אף עובד.',
+  REQUEST_WORKER_INELIGIBLE: 'העובד אינו מורשה למשמרת זו לפי רשימת העובדים או הרשאות יום/לילה.',
+  REQUEST_WORKER_UNAVAILABLE: 'העובד אינו זמין באחד הימים שהמשמרת מכסה.',
+  REQUEST_DAILY_STATUS: 'קיים סטטוס חוסם באחד התאריכים שהמשמרת מכסה.',
+  REQUEST_OVERLAP: 'קיימת חפיפה עם משמרת אחרת של העובד.',
+  REQUEST_REST: 'השיבוץ מפר את המנוחה המחייבת אחרי לילה או משמרת רצופה.',
+  REQUEST_LIMIT: 'העובד הגיע למכסת המשמרות בשבוע.',
 }
 
 export function cloudError(error: unknown): string {
   const message = error && typeof error === 'object' && 'message' in error ? String(error.message) : String(error)
   for (const [code, text] of Object.entries(errors)) if (message.includes(code)) return text
+  if ((message.includes('sm_submit_request') || message.includes('sm_decide_request')) && message.includes('schema cache')) {
+    return 'סוגי הבקשות החדשים טרם הותקנו. יש להריץ את קובץ ההגירה 202611220001_request_options.sql ב־Supabase.'
+  }
   if (message.toLowerCase().includes('email rate limit exceeded')) {
     return 'נשלחו יותר מדי הודעות אימות בזמן קצר. יש להמתין ולנסות שוב, או להגדיר ספק SMTP ב־Supabase.'
   }

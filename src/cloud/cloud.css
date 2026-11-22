@@ -12,7 +12,7 @@
 .cloud-sync p { margin: 8px 0; }
 .workspace-list { display: grid; gap: 10px; margin: 20px 0; }
 .cloud-name { display: grid; gap: 8px; margin: 18px 0; }
-.cloud-card input, .workspace-settings input, .workspace-settings select, .request-row input {
+.cloud-card input, .workspace-settings input, .workspace-settings select, .request-row input, .request-row select {
   border: 1px solid #d5deed; border-radius: 6px; padding: 10px; background: white; color: #172033; min-width: 0;
 }
 .invite-prompt { border: 1px solid #b5cbee; padding: 16px; border-radius: 8px; margin: 16px 0; }

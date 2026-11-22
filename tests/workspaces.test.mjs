@@ -4,6 +4,7 @@ import test from 'node:test'
 import { PGlite } from '@electric-sql/pglite'
 import { assignmentConflict, coveredDates, createOccurrence, generateWeek } from '../src/scheduling.ts'
 import { parseScheduleData } from '../src/schedule-data.ts'
+import { matchingRequestShifts, requestStatus } from '../src/requests.ts'
 
 const manager = '00000000-0000-4000-8000-000000000001'
 const employee = '00000000-0000-4000-8000-000000000002'
@@ -36,7 +37,7 @@ test('workspace RPCs enforce identity, roles, invitations, concurrency and appro
       grant execute on function auth.uid(), auth.jwt() to anon, authenticated;
       insert into auth.users values ('${manager}'), ('${employee}'), ('${outsider}');
     `)
-    for (const name of ['202611190001_workspaces.sql', '202611190002_constraint_privacy.sql', '202611190003_delete_workspace.sql', '202611200001_week_publishing.sql']) {
+    for (const name of ['202611190001_workspaces.sql', '202611190002_constraint_privacy.sql', '202611190003_delete_workspace.sql', '202611200001_week_publishing.sql', '202611220001_request_options.sql']) {
       const migration = await readFile(new URL(`../supabase/migrations/${name}`, import.meta.url), 'utf8')
       try { await db.exec(migration) } catch (error) {
         const line = migration.slice(0, Number(error.position)).split('\n').length
@@ -263,7 +264,7 @@ test('workspace RPCs enforce identity, roles, invitations, concurrency and appro
       assert.ok(other.data.dailyStatuses['2026-11-20'].b)
       assert.deepEqual(other.data.workers[0].excludedDays, [])
       assert.deepEqual(other.data.workers[1].excludedDays, [6])
-      assert.deepEqual(other.data.assignments, before.data.assignments)
+      assert.deepEqual(other.data.assignments, own.data.assignments)
       assert.equal((await db.query('select * from public.sm_requests')).rows.length, 0)
       await assert.rejects(() => db.query("select data->'dailyStatuses' from public.sm_workspaces"), /permission denied/)
       assert.equal((await db.query('select id,name,revision,created_at from public.sm_workspaces')).rows.length, 1)
@@ -304,6 +305,180 @@ test('workspace RPCs enforce identity, roles, invitations, concurrency and appro
       await assert.rejects(() => scalar('select public.sm_revoke_request_approval($1,$2) as result', [monday, after.revision]), /REQUEST_NOT_APPROVED_CONSTRAINT/)
       await decide(monday, 'approved')
       assert.equal((await state()).data.dailyStatuses['2026-11-16'].a.requestId, monday)
+    })
+    await t.test('expanded requests apply statuses and validated manual assignments', async (t) => {
+      const dayShift = { ...shift, id: 'day', name: 'Day', start: '08:00', end: '16:00', activeDays: [0, 1, 2, 3, 4, 5, 6], requiredWorkers: 2 }
+      const nightShift = { ...shift, activeDays: dayShift.activeDays }
+      const office = { id: 'office', label: 'Office', color: '#123456', blocksShifts: false, note: '' }
+      const training = { ...office, id: 'training', label: 'Training', blocksShifts: true }
+      const base = { workers: initial.workers, shifts: [dayShift, nightShift, grouped], assignments: {}, lockedSlots: {}, dailyStatuses: {}, customStatuses: [office, training] }
+      async function fixture(data = base) {
+        await login(manager)
+        const id = await scalar("select public.sm_create_workspace('Requests') as result")
+        const state = async (user = manager) => {
+          await login(user)
+          return scalar('select public.sm_get_workspace($1) as result', [id])
+        }
+        const save = async (data) => scalar('select public.sm_save_workspace($1,$2,$3) as result', [id, (await state()).revision, data])
+        const publish = async () => scalar('select public.sm_publish_week($1,$2,$3) as result', [id, week, (await state()).revision])
+        await save(data)
+        await publish()
+        const invite = await scalar('select public.sm_create_invite($1) as result', [id])
+        await login(employee)
+        await scalar('select public.sm_join_workspace($1) as result', [invite.token])
+        await login(manager)
+        await scalar('select public.sm_update_member($1,$2,$3,$4) as result', [id, employee, 'member', 'a'])
+        const submit = async (kind, date = week, custom = null) => {
+          await login(employee)
+          return scalar('select public.sm_submit_request($1,$2,$3,$4,$5) as result', [id, date, kind, 'Private reason', custom])
+        }
+        const decide = async (request, shiftId = null, decision = 'approved', revision) =>
+          scalar('select public.sm_decide_request($1,$2,$3,$4,$5) as result', [request, decision, 'Reviewed', revision ?? (await state()).revision, shiftId])
+        return { id, state, save, submit, decide, publish }
+      }
+      await t.test('leave creates a protected full-day block with private request details', async () => {
+        const f = await fixture()
+        const id = await f.submit('leave')
+        await f.decide(id)
+        const after = await f.state()
+        const cell = after.data.dailyStatuses[week].a
+        assert.deepEqual(cell, { ...requestStatus({ kind: 'leave', custom_status: null }), note: 'בקשה מאושרת', requestId: id })
+        assert.equal(assignmentConflict(worker, createOccurrence(week, 0, dayShift), base.shifts, {}, after.data.dailyStatuses), 'daily-status')
+        await f.save(after.data)
+        after.data.dailyStatuses = {}
+        await assert.rejects(() => f.save(after.data), /APPROVED_REQUEST_PROTECTED/)
+        assert.ok(!JSON.stringify((await f.state(employee)).data).includes('Private reason'))
+        await login(outsider)
+        assert.equal((await db.query('select id from public.sm_requests where id = $1', [id])).rows.length, 0)
+      })
+      await t.test('custom snapshots retain their appearance and blocking policy; nonblocking statuses allow shifts', async () => {
+        const f = await fixture({ ...base, assignments: { [week]: { '0:day': ['a'] } } })
+        await assert.rejects(() => f.submit('custom', week, 'invented'), /INVALID_CUSTOM_STATUS/)
+        await assert.rejects(() => f.submit('leave', week, 'office'), /INVALID_CUSTOM_STATUS/)
+        const id = await f.submit('custom', week, 'office')
+        const changed = (await f.state()).data
+        changed.customStatuses = [{ ...office, label: 'Changed', color: '#ffffff', blocksShifts: true }]
+        await f.save(changed)
+        await f.decide(id)
+        const after = await f.state()
+        assert.deepEqual(after.data.dailyStatuses[week].a, { label: office.label, color: office.color, blocksShifts: false, note: 'בקשה מאושרת', requestId: id })
+        assert.deepEqual(after.data.assignments[week]['0:day'], ['a'])
+        await f.save(after.data)
+        after.data.dailyStatuses[week].a.color = '#ffffff'
+        await assert.rejects(() => f.save(after.data), /APPROVED_REQUEST_PROTECTED/)
+      })
+      await t.test('unpublished custom definitions cannot be requested by members', async () => {
+        const f = await fixture({ ...base, customStatuses: [] })
+        await f.save(base)
+        await assert.rejects(() => f.submit('custom', week, 'office'), /INVALID_CUSTOM_STATUS/)
+        await f.publish()
+        assert.ok(await f.submit('custom', week, 'office'))
+      })
+      await t.test('status requests neither overwrite cells nor remove conflicting assignments', async () => {
+        for (const [kind, custom, data, error] of [
+          ['leave', null, { ...base, assignments: { [week]: { '0:night': ['a'] } } }, /REQUEST_SHIFT_CONFLICT/],
+          ['custom', 'training', { ...base, assignments: { [week]: { '0:day': ['a'] } } }, /REQUEST_SHIFT_CONFLICT/],
+          ['custom', 'office', { ...base, dailyStatuses: { [week]: { a: office } } }, /REQUEST_STATUS_CONFLICT/],
+        ]) {
+          const f = await fixture(data)
+          const id = await f.submit(kind, week, custom)
+          const before = await f.state()
+          await assert.rejects(() => f.decide(id), error)
+          assert.deepEqual(await f.state(), before)
+          assert.equal((await db.query('select status from public.sm_requests where id = $1', [id])).rows[0].status, 'pending')
+        }
+        const f = await fixture()
+        const id = await f.submit('custom', week, 'training')
+        await f.decide(id)
+        const saved = (await f.state()).data
+        assert.equal(saved.dailyStatuses[week].a.blocksShifts, true)
+        saved.assignments = { [week]: { '0:day': ['a'] } }
+        await assert.rejects(() => f.save(saved), /REQUEST_SHIFT_CONFLICT/)
+      })
+      await t.test('approval adds a real locked shift, preserves coworkers and requires explicit publication', async () => {
+        const f = await fixture({ ...base, assignments: { [week]: { '0:day': ['b'], '2:day': ['b'] } }, lockedSlots: { [week]: ['2:day'] } })
+        const id = await f.submit('day_shift')
+        const before = await f.state()
+        await f.state(employee)
+        await assert.rejects(() => f.decide(id, 'day', 'approved', before.revision), /MANAGER_REQUIRED/)
+        await f.state()
+        await assert.rejects(() => f.decide(id, 'day', 'approved', before.revision - 1), /STALE_REVISION/)
+        await f.decide(id, 'day')
+        const after = await f.state()
+        assert.equal(after.revision, before.revision + 1)
+        assert.deepEqual(after.data.assignments[week], { '0:day': ['b', 'a'], '2:day': ['b'] })
+        assert.deepEqual(after.data.lockedSlots[week], ['2:day', '0:day'])
+        assert.deepEqual(after.data.dailyStatuses, {})
+        assert.equal((await db.query('select assigned_shift_id from public.sm_requests where id = $1', [id])).rows[0].assigned_shift_id, 'day')
+        assert.deepEqual((await f.state(employee)).data.assignments[week]['0:day'], ['b'])
+        await f.save(after.data)
+        await f.publish()
+        assert.deepEqual((await f.state(employee)).data.assignments[week]['0:day'], ['b', 'a'])
+        // An approved shift is protected from generation by its slot lock,
+        // but managers can still deliberately change it like other manual shifts.
+        after.data.assignments[week]['0:day'] = ['b']
+        await f.save(after.data)
+      })
+      await t.test('manual-only nights and already assigned workers are supported without duplicates', async () => {
+        const f = await fixture({ ...base, workers: [{ ...worker, manualNightOnly: true, maxShifts: 1 }] })
+        const id = await f.submit('night_shift')
+        await f.decide(id, 'night')
+        assert.deepEqual((await f.state()).data.assignments[week]['0:night'], ['a'])
+        const existing = await fixture({ ...base, workers: [{ ...worker, maxShifts: 1 }], assignments: { [week]: { '0:night': ['a'] } } })
+        await existing.decide(await existing.submit('night_shift'), 'night')
+        assert.deepEqual((await existing.state()).data.assignments[week]['0:night'], ['a'])
+      })
+      await t.test('matching uses starting date and explicit classification, not names or continuations', async () => {
+        const renamed = { ...nightShift, name: 'Day', period: 'day' }
+        assert.deepEqual(matchingRequestShifts(week, 'day_shift', [dayShift, renamed, grouped]).map((o) => o.shift.id), ['day', 'night'])
+        const f = await fixture({ ...base, shifts: [renamed] })
+        await f.decide(await f.submit('day_shift'), 'night')
+        assert.deepEqual((await f.state()).data.assignments[week]['0:night'], ['a'])
+      })
+      await t.test('invalid targets and schedule conflicts leave requests pending and data unchanged', async (t) => {
+        const cases = [
+          ['missing selection', base, 'day_shift', null, 'REQUEST_SHIFT_REQUIRED'],
+          ['wrong period', base, 'day_shift', 'night', 'REQUEST_SHIFT_MISMATCH'],
+          ['unknown shift', base, 'day_shift', 'missing', 'REQUEST_SHIFT_MISMATCH'],
+          ['grouped shift', base, 'night_shift', 'group', 'REQUEST_SHIFT_MISMATCH'],
+          ['inactive day', { ...base, shifts: [{ ...dayShift, activeDays: [1] }] }, 'day_shift', 'day', 'REQUEST_SHIFT_MISMATCH'],
+          ['full shift', { ...base, assignments: { [week]: { '0:night': ['b'] } } }, 'night_shift', 'night', 'REQUEST_SHIFT_FULL'],
+          ['night permission', { ...base, workers: [{ ...worker, allowNightShifts: false }] }, 'night_shift', 'night', 'REQUEST_WORKER_INELIGIBLE', 'night-not-allowed'],
+          ['grouped only', { ...base, workers: [{ ...worker, groupedOnly: true }] }, 'day_shift', 'day', 'REQUEST_WORKER_INELIGIBLE', 'grouped-only'],
+          ['eligible list', { ...base, shifts: [{ ...dayShift, eligibleWorkerIds: [] }] }, 'day_shift', 'day', 'REQUEST_WORKER_INELIGIBLE', 'worker-not-eligible'],
+          ['overnight availability', { ...base, workers: [{ ...worker, excludedDays: [1] }] }, 'night_shift', 'night', 'REQUEST_WORKER_UNAVAILABLE', 'unavailable'],
+          ['blocking next day', { ...base, dailyStatuses: { '2026-11-16': { a: training } } }, 'night_shift', 'night', 'REQUEST_DAILY_STATUS', 'daily-status'],
+          ['overlap', { ...base, shifts: [dayShift, { ...dayShift, id: 'other' }], assignments: { [week]: { '0:other': ['a'] } } }, 'day_shift', 'day', 'REQUEST_OVERLAP', 'overlap'],
+          ['previous-week rest', { ...base, assignments: { '2026-11-08': { '6:night': ['a'] } } }, 'night_shift', 'night', 'REQUEST_REST', 'rest-day'],
+          ['grouped rest', { ...base, assignments: { '2026-11-08': { '4:group': ['a'] } } }, 'night_shift', 'night', 'REQUEST_REST', 'rest-day'],
+          ['symmetric future rest', { ...base, shifts: [{ ...dayShift, start: '10:00' }, nightShift], assignments: { [week]: { '1:day': ['a'] } } }, 'night_shift', 'night', 'REQUEST_REST', 'rest-day'],
+          ['weekly quota', { ...base, workers: [{ ...worker, maxShifts: 1 }], assignments: { [week]: { '2:day': ['a'] } } }, 'day_shift', 'day', 'REQUEST_LIMIT', 'limit'],
+        ]
+        for (const [name, data, kind, shiftId, error, browserError] of cases) await t.test(name, async () => {
+          const f = await fixture(data)
+          const id = await f.submit(kind)
+          const before = await f.state()
+          if (browserError) {
+            const occurrence = matchingRequestShifts(week, kind, data.shifts).find((o) => o.shift.id === shiftId)
+            assert.equal(assignmentConflict(data.workers[0], occurrence, data.shifts, data.assignments, data.dailyStatuses), browserError)
+          }
+          await assert.rejects(() => f.decide(id, shiftId), new RegExp(error))
+          assert.deepEqual(await f.state(), before)
+          assert.equal((await db.query('select status from public.sm_requests where id = $1', [id])).rows[0].status, 'pending')
+          await f.decide(id, null, 'denied')
+          assert.deepEqual(await f.state(), before)
+        })
+      })
+      await t.test('midnight coverage is end-exclusive while the ending date still requires rest', async () => {
+        const midnight = { ...nightShift, end: '00:00' }
+        const data = { ...base, shifts: [midnight, dayShift], workers: [{ ...worker, excludedDays: [1] }] }
+        const f = await fixture(data)
+        await f.decide(await f.submit('night_shift'), 'night')
+        assert.deepEqual((await f.state()).data.assignments[week]['0:night'], ['a'])
+        const rest = await fixture({ ...base, shifts: [midnight, dayShift], assignments: { '2026-11-08': { '6:night': ['a'] } } })
+        const id = await rest.submit('day_shift')
+        await assert.rejects(() => rest.decide(id, 'day'), /REQUEST_REST/)
+      })
     })
     await t.test('upgrade backfills legacy approvals and cancellation never removes an unrelated cell', async () => {
       await db.exec('reset role')

@@ -201,14 +201,14 @@ export default function WorkspaceSession({ client, workspaceId, userId, onBack, 
             </section>
             <RequestsPanel week={week} member={me} requests={model.requests}
               data={model.snapshot.data} dirty={dirty} busy={busy}
-              onSubmit={(date, kind, reason) => perform(async () => {
-                const result = await client.rpc('sm_submit_request', { p_workspace: workspaceId, p_date: date, p_kind: kind, p_reason: reason })
+              onSubmit={(date, kind, reason, customStatusId) => perform(async () => {
+                const result = await client.rpc('sm_submit_request', { p_workspace: workspaceId, p_date: date, p_kind: kind, p_reason: reason, p_custom_status_id: customStatusId ?? null })
                 if (result.error) throw result.error
               }, 'הבקשה נשלחה למנהלים. עד לאישור היא אינה משנה את השיבוץ.')}
-              onDecide={(id, decision, note) => perform(async () => {
-                const result = await client.rpc('sm_decide_request', { p_request: id, p_decision: decision, p_note: note, p_revision: model.snapshot.revision })
+              onDecide={(id, decision, note, shiftId) => perform(async () => {
+                const result = await client.rpc('sm_decide_request', { p_request: id, p_decision: decision, p_note: note, p_revision: model.snapshot.revision, p_shift_id: shiftId ?? null })
                 if (result.error) throw result.error
-              }, decision === 'approved' ? 'הבקשה אושרה והתאריך חסום לשיבוץ.' : 'הבקשה נדחתה; הסידור לא השתנה.')}
+              }, decision === 'approved' ? 'הבקשה אושרה והוחל השיבוץ או הסטטוס המבוקש. שינויי משמרות יוצגו לעובדים לאחר פרסום השבוע.' : 'הבקשה נדחתה; הסידור לא השתנה.')}
               onRevoke={(id) => perform(async () => {
                 const result = await client.rpc('sm_revoke_request_approval', { p_request: id, p_revision: model.snapshot.revision })
                 if (result.error) throw result.error

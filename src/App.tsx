@@ -23,6 +23,8 @@ import { shiftAppearance } from './shift-status'
 import { parseScheduleData } from './schedule-data'
 import type { ScheduleData } from './schedule-data'
 import type { ShiftRequest } from './cloud/client'
+import { isShiftRequest } from './requests'
+import { assignmentConflictMessage } from './assignment-errors'
 import StatusSettings, { StatusBadge, StatusCreator } from './StatusSettings'
 import WorkerWeekTable from './WorkerWeekTable'
 
@@ -234,7 +236,8 @@ function App({ cloud }: { cloud?: CloudSchedule }) {
 
   function saveDailyStatus(date: string, workerId: string, status: DailyStatus | null) {
     if (!canEdit) return 'רק מנהלים יכולים לערוך את הסידור.'
-    if (cloud?.requests.some((request) => request.status === 'approved' && request.request_date === date && request.worker_id === workerId)) {
+    if (cloud?.requests.some((request) => request.status === 'approved' && !isShiftRequest(request.kind) &&
+      request.request_date === date && request.worker_id === workerId)) {
       return 'סטטוס זה נוצר מבקשה מאושרת ואינו ניתן לשינוי.'
     }
     if (status?.blocksShifts) {
@@ -366,19 +369,9 @@ function App({ cloud }: { cloud?: CloudSchedule }) {
     }
     const conflict = assignmentConflict(worker, occurrence, shifts, assignments, dailyStatuses)
     if (conflict) {
-      const messages = {
-        'daily-status': 'לעובד יש סטטוס חוסם באחד התאריכים שהמשמרת מכסה. ניתן לערוך אותו בטבלת העובדים.',
-        'worker-not-eligible': 'העובד אינו ברשימת העובדים המורשים למשמרת זו',
-        'grouped-not-allowed': 'לעובד אין הרשאה למשמרות רצופות על פני מספר ימים',
-        'grouped-only': 'העובד מורשה למשמרות שבת רצופות בלבד, ללא משמרות רגילות',
-        'night-not-allowed': 'העובד אינו מורשה למשמרות לילה, גם לא בשיבוץ ידני',
-        unavailable: 'העובד אינו זמין באחד הימים שהמשמרת מכסה',
-        overlap: 'קיימת חפיפה עם שיבוץ אחר של העובד, כולל בשבוע סמוך',
-        'rest-day': 'לא ניתן לשבץ: אחרי משמרת לילה או משמרת רצופה נדרשת מנוחה עד סוף יום הסיום, גם בשיבוץ ידני ובין שבועות.',
-        limit: `${worker.name} כבר הגיע למכסת ${worker.maxShifts} המשמרות בשבוע תחילת המשמרת`,
-      }
-      setError(messages[conflict])
-      return messages[conflict]
+      const message = assignmentConflictMessage(conflict, worker)
+      setError(message)
+      return message
     }
 
     setAssignments((current) => ({
