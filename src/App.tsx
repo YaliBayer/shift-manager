@@ -17,7 +17,7 @@ import {
   weekOccurrences,
 } from './scheduling'
 import type { AssignmentsByWeek, DayIndex, LockedSlotsByWeek, ShiftOccurrence, ShiftTemplate, Worker } from './scheduling'
-import { BUILTIN_STATUSES, customStatusError, migrateDailyStatuses, updateDailyStatus } from './daily-status'
+import { BUILTIN_STATUSES, customStatusError, migrateDailyStatuses, updateDailyStatus, updateDailyStatusRange } from './daily-status'
 import type { DailyStatus, DailyStatuses, StatusDefinition } from './daily-status'
 import { shiftAppearance } from './shift-status'
 import { parseScheduleData } from './schedule-data'
@@ -234,21 +234,29 @@ function App({ cloud }: { cloud?: CloudSchedule }) {
     return null
   }
 
-  function saveDailyStatus(date: string, workerId: string, status: DailyStatus | null) {
+  function saveDailyStatus(date: string, workerId: string, status: DailyStatus | null, endDate = date) {
     if (!canEdit) return 'רק מנהלים יכולים לערוך את הסידור.'
-    if (cloud?.requests.some((request) => request.status === 'approved' && !isShiftRequest(request.kind) &&
-      request.request_date === date && request.worker_id === workerId)) {
-      return 'סטטוס זה נוצר מבקשה מאושרת ואינו ניתן לשינוי.'
-    }
-    if (status?.blocksShifts) {
-      const conflicting = Object.keys(assignments).flatMap((week) => weekOccurrences(week, shifts))
-        .filter((item) => assignments[item.week]?.[item.key]?.includes(workerId) && coveredDates(item).includes(date))
-      if (conflicting.length) {
-        return `לא ניתן לחסום את היום כשיש שיבוץ חופף: ${conflicting.map((item) => item.shift.name).join(', ')}. הסר את השיבוץ תחילה; משמרת רצופה תוסר בכל ימיה.`
+    const assigned = status?.blocksShifts
+      ? Object.keys(assignments).flatMap((week) => weekOccurrences(week, shifts))
+        .filter((item) => assignments[item.week]?.[item.key]?.includes(workerId))
+        .map((item) => ({ name: item.shift.name, dates: coveredDates(item) }))
+      : []
+    const result = updateDailyStatusRange(dailyStatuses, date, endDate, workerId, status, (targetDate) => {
+      if (cloud?.requests.some((request) => request.status === 'approved' && !isShiftRequest(request.kind) &&
+        request.request_date === targetDate && request.worker_id === workerId)) {
+        return 'סטטוס זה נוצר מבקשה מאושרת ואינו ניתן לשינוי.'
       }
+      const conflicting = assigned.filter((item) => item.dates.includes(targetDate))
+      return conflicting.length
+        ? `לא ניתן לחסום את היום כשיש שיבוץ חופף: ${conflicting.map((item) => item.name).join(', ')}. הסר את השיבוץ תחילה; משמרת רצופה תוסר בכל ימיה.`
+        : null
+    })
+    if (result.error !== null) return result.error
+    if (endDate > date && Object.entries(dailyStatuses).some(([day, entries]) => day > date && day <= endDate && entries[workerId])) {
+      if (!window.confirm('בטווח שנבחר קיימים סטטוסים נוספים לעובד. להחליף אותם בסטטוס שנבחר?')) return 'השמירה בוטלה. לא בוצע שינוי.'
     }
-    setDailyStatuses((current) => updateDailyStatus(current, date, workerId, status))
-    setNotice('התא נשמר')
+    setDailyStatuses(result.statuses)
+    setNotice(endDate === date ? 'התא נשמר' : 'הסטטוס נשמר לכל התאריכים בטווח')
     return null
   }
 

@@ -67,6 +67,37 @@ export function updateDailyStatus(
   return updated
 }
 
+export function updateDailyStatusRange(
+  statuses: DailyStatuses, start: string, end: string, workerId: string, status: DailyStatus | null,
+  validate: (date: string) => string | null,
+): { statuses: DailyStatuses; error: null } | { error: string } {
+  const first = new Date(`${start}T00:00:00Z`)
+  const last = new Date(`${end}T00:00:00Z`)
+  if (![start, end].every((value) => /^\d{4}-\d{2}-\d{2}$/.test(value)) ||
+    !Number.isFinite(first.getTime()) || !Number.isFinite(last.getTime()) ||
+    first.toISOString().slice(0, 10) !== start || last.toISOString().slice(0, 10) !== end || end < start) {
+    return { error: 'יש לבחור תאריך סיום תקין שאינו לפני תאריך ההתחלה.' }
+  }
+  const dates: string[] = []
+  for (const cursor = new Date(first); cursor <= last; cursor.setUTCDate(cursor.getUTCDate() + 1)) {
+    const date = cursor.toISOString().slice(0, 10)
+    if (statuses[date]?.[workerId]?.requestId) {
+      return { error: `${date}: סטטוס זה נוצר מבקשה מאושרת ואינו ניתן לשינוי.` }
+    }
+    const error = validate(date)
+    if (error) return { error: `${date}: ${error}` }
+    dates.push(date)
+  }
+  const updated = { ...statuses }
+  for (const date of dates) {
+    updated[date] = { ...statuses[date] }
+    if (status) updated[date][workerId] = { ...status }
+    else delete updated[date][workerId]
+    if (Object.keys(updated[date]).length === 0) delete updated[date]
+  }
+  return { statuses: updated, error: null }
+}
+
 export function migrateDailyStatuses(statuses: DailyStatuses): DailyStatuses {
   return Object.fromEntries(Object.entries(statuses).map(([date, workers]) => [
     date, Object.fromEntries(Object.entries(workers).map(([id, status]) => [

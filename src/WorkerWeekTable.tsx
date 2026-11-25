@@ -19,7 +19,7 @@ type Props = {
   statuses: DailyStatuses
   customStatuses: StatusDefinition[]
   canEdit: boolean
-  onSaveStatus: (date: string, workerId: string, status: DailyStatus | null) => string | null
+  onSaveStatus: (date: string, workerId: string, status: DailyStatus | null, endDate?: string) => string | null
   onAssign: (occurrence: ShiftOccurrence, workerId: string) => string | null
   onUnassign: (occurrence: ShiftOccurrence, workerId: string) => void
   onLock: (occurrence: ShiftOccurrence, locked: boolean) => void
@@ -107,6 +107,7 @@ function CellEditor(props: Props & { worker: Worker; day: DayIndex; occurrences:
   const { worker, day, dates, week, statuses, occurrences, assignments, locks, onClose } = props
   const date = dates[day]
   const [draft, setDraft] = useState<DailyStatus | null>(statuses[date]?.[worker.id] ?? null)
+  const [endDate, setEndDate] = useState(date)
   const [error, setError] = useState('')
   const dialog = useRef<HTMLDialogElement>(null)
   useEffect(() => { dialog.current?.showModal() }, [])
@@ -160,11 +161,11 @@ function CellEditor(props: Props & { worker: Worker; day: DayIndex; occurrences:
       {props.canEdit && <form onSubmit={(event) => {
         event.preventDefault()
         if (draft && !draft.label.trim()) { setError('יש להזין שם לסטטוס.'); return }
-        const message = props.onSaveStatus(date, worker.id, draft ? { ...draft, label: draft.label.trim() } : null)
+        const message = props.onSaveStatus(date, worker.id, draft ? { ...draft, label: draft.label.trim() } : null, draft ? endDate : date)
         if (message) setError(message)
         else onClose()
       }}>
-        <h3>סטטוס לתאריך זה בלבד</h3>
+        <h3>סטטוס לתאריך או לטווח תאריכים</h3>
         <div className="form-grid">
           <label className="full-width"><span>סטטוס</span><select value={preset} onChange={(event) => {
             const value = event.target.value
@@ -178,6 +179,7 @@ function CellEditor(props: Props & { worker: Worker; day: DayIndex; occurrences:
             <option value="custom">סטטוס מותאם (למשל משרד)</option>
           </select></label>
           {draft && <>
+            <label className="full-width"><span>עד תאריך (כולל)</span><input type="date" required min={date} max="9999-12-31" value={endDate} onChange={(event) => setEndDate(event.target.value)} /></label>
             <label><span>שם הסטטוס</span><input required value={draft.label} onChange={(event) => setDraft({ ...draft, label: event.target.value })} /></label>
             <label><span>צבע התא</span><input type="color" value={draft.color} onChange={(event) => setDraft({ ...draft, color: event.target.value })} /></label>
             <label className="full-width"><span>הערה / מיקום</span><input value={draft.note} onChange={(event) => setDraft({ ...draft, note: event.target.value })} /></label>
@@ -187,7 +189,8 @@ function CellEditor(props: Props & { worker: Worker; day: DayIndex; occurrences:
             </select></label>
           </>}
         </div>
-        <p className="cell-help">סטטוס אינו יוצר משמרת ואינו מחליף שיבוץ קיים. לפני שמירת חסימה יש להסיר שיבוצים החופפים לתאריך, כולל משמרת לילה מהיום הקודם.</p>
+        <p className="cell-help">הסטטוס יחול מהתאריך שנבחר ועד תאריך הסיום כולל, גם בשבועות הבאים. לתאריך בודד השאר את תאריך הסיום ללא שינוי. לפני שמירת חסימה יש להסיר שיבוצים החופפים לטווח, כולל משמרת לילה מהיום הקודם.</p>
+        {error && <p role="alert" className="validation-message">{error}</p>}
         <div className="modal-actions"><button type="button" className="button secondary" onClick={onClose}>ביטול</button><button className="button primary">שמירת תא</button></div>
       </form>}
     </dialog>

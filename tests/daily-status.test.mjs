@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { BUILTIN_STATUSES, customStatusError, isCustomStatuses, isDailyStatuses, migrateDailyStatuses, updateDailyStatus } from '../src/daily-status.ts'
+import { BUILTIN_STATUSES, customStatusError, isCustomStatuses, isDailyStatuses, migrateDailyStatuses, updateDailyStatus, updateDailyStatusRange } from '../src/daily-status.ts'
 import { isShiftStatusConfiguration, shiftAppearance } from '../src/shift-status.ts'
 import {
   assignmentConflict, createOccurrence, coveredDates, generateWeek,
@@ -14,6 +14,42 @@ const worker = { id: 'a', name: 'A', role: '', phone: '', maxShifts: 5, excluded
 const shift = { id: 'day', name: 'Day', start: '09:00', end: '17:00', activeDays: [0, 1], requiredWorkers: 1 }
 const leave = { label: 'Leave', color: '#ad86f5', blocksShifts: true, note: 'Away' }
 const weekend = { ...shift, id: 'weekend', start: '18:00', end: '09:00', activeDays: [4], grouping: { startDay: 4, endDay: 0 } }
+
+test('status ranges include both endpoints across weeks and years, preserving other cells', () => {
+  const original = { '2026-12-31': { b: leave }, '2027-01-03': { a: leave } }
+  const before = structuredClone(original)
+  const result = updateDailyStatusRange(original, '2026-12-31', '2027-01-02', 'a', leave, () => null)
+  assert.equal(result.error, null)
+  for (const date of ['2026-12-31', '2027-01-01', '2027-01-02']) assert.deepEqual(result.statuses[date].a, leave)
+  assert.deepEqual(result.statuses['2026-12-31'].b, leave)
+  assert.deepEqual(result.statuses['2027-01-03'], original['2027-01-03'])
+  assert.deepEqual(original, before)
+  assert.ok(isDailyStatuses(JSON.parse(JSON.stringify(result.statuses))))
+  const single = updateDailyStatusRange({}, week, week, 'a', leave, () => null)
+  assert.deepEqual(single.statuses, { [week]: { a: leave } })
+})
+
+test('invalid status ranges and protected later dates reject the entire change', () => {
+  for (const end of ['', '2026-11-14', '2026-02-30', 'not-a-date']) {
+    assert.ok(updateDailyStatusRange({}, week, end, 'a', leave, () => null).error)
+  }
+  const original = { [nextWeek]: { a: { ...leave, requestId: 'approved-request' } } }
+  const before = structuredClone(original)
+  const result = updateDailyStatusRange(original, week, nextWeek, 'a', leave, () => null)
+  assert.match(result.error, /2026-11-22/)
+  assert.equal('statuses' in result, false)
+  assert.deepEqual(original, before)
+})
+
+test('range validation checks the final day for an incoming grouped shift before saving', () => {
+  const occurrence = createOccurrence(week, 4, weekend)
+  const original = { [week]: { b: leave } }
+  const result = updateDailyStatusRange(original, '2026-11-18', '2026-11-19', 'a', leave,
+    (date) => coveredDates(occurrence).includes(date) ? 'Shift conflict' : null)
+  assert.match(result.error, /2026-11-19: Shift conflict/)
+  assert.equal('statuses' in result, false)
+  assert.deepEqual(original, { [week]: { b: leave } })
+})
 
 test('daily blocking is date- and worker-specific for both manual and automatic assignment', () => {
   const statuses = { [week]: { a: leave } }
