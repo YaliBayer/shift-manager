@@ -21,6 +21,7 @@ export default function WorkspaceSession({ client, workspaceId, userId, onBack, 
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
+  const [saveFailed, setSaveFailed] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const busyRef = useRef(false)
   const sequence = useRef(0)
@@ -76,7 +77,10 @@ export default function WorkspaceSession({ client, workspaceId, userId, onBack, 
   async function perform(action: () => Promise<void>, success: string, discard = false) {
     if (busyRef.current) return
     busyRef.current = true; sequence.current++; setBusy(true); setError(''); setNotice('')
-    try { await action(); await refresh(discard); setNotice(success) }
+    try {
+      await action(); await refresh(discard); setNotice(success)
+      if (discard) setSaveFailed(false)
+    }
     catch (error) { setError(cloudError(error)) }
     finally { busyRef.current = false; setBusy(false) }
   }
@@ -86,8 +90,8 @@ export default function WorkspaceSession({ client, workspaceId, userId, onBack, 
     setModel((current) => current ? { ...current, draft: typeof update === 'function' ? update(current.draft) : update } : current)
   }
 
-  async function save() {
-    if (!model || !manager || busyRef.current) return
+  const save = useCallback(async () => {
+    if (!model || !manager || !hasChanges(model) || busyRef.current) return
     busyRef.current = true; sequence.current++; setBusy(true); setError(''); setNotice('')
     try {
       const result = await client.rpc('sm_save_workspace', {
@@ -97,10 +101,17 @@ export default function WorkspaceSession({ client, workspaceId, userId, onBack, 
       const data = parseScheduleData(result.data.data)
       setModel((current) => current ? { ...current, snapshot: { data, revision: result.data.revision },
         draft: data, latestRevision: result.data.revision } : current)
+      setSaveFailed(false)
       setNotice('הטיוטה נשמרה למנהלים. עובדים יראו שבוע רק לאחר פרסומו.')
-    } catch (error) { setError(cloudError(error)) }
+    } catch (error) { setError(cloudError(error)); setSaveFailed(true) }
     finally { busyRef.current = false; setBusy(false) }
-  }
+  }, [client, workspaceId, model, manager])
+
+  useEffect(() => {
+    if (!manager || !dirty || busy || saveFailed || model?.latestRevision !== model?.snapshot.revision) return
+    const timer = window.setTimeout(() => { void save() }, 1000)
+    return () => window.clearTimeout(timer)
+  }, [manager, dirty, busy, saveFailed, model?.latestRevision, model?.snapshot.revision, save])
 
   async function deleteWorkspace() {
     if (!model || !manager || busyRef.current) return
@@ -137,7 +148,7 @@ export default function WorkspaceSession({ client, workspaceId, userId, onBack, 
     <header className="workspace-bar">
       <div><strong>{model?.name ?? 'סביבת עבודה'}</strong><small>{manager ? 'מנהל — עריכה ופרסום' : 'חבר — צפייה ושליחת בקשות'}</small></div>
       <div className="cloud-actions">
-        {manager && <button className="button primary" disabled={!dirty || busy} onClick={save}>שמירת טיוטה</button>}
+        {manager && <button className="button primary" disabled={!dirty || busy} onClick={save}>{saveFailed ? 'ניסיון שמירה נוסף' : 'שמירה עכשיו'}</button>}
         {manager && <button className="button secondary" onClick={() => setShowSettings(!showSettings)}>חברים והזמנות</button>}
         <button className="button secondary" disabled={busy} onClick={() => {
           if (canLeave()) perform(async () => {}, 'הנתונים נטענו מחדש.', true)
@@ -147,7 +158,10 @@ export default function WorkspaceSession({ client, workspaceId, userId, onBack, 
       </div>
     </header>
     <div className="cloud-sync">
-      {dirty ? <strong>שינויים מקומיים שטרם נשמרו — שמור את הטיוטה לפני פרסום שבוע.</strong> : <span>{manager ? 'מוצגת טיוטת המנהלים השמורה.' : 'מוצגים רק שבועות שמנהל פרסם.'} עדכונים נבדקים כל 15 שניות ובחזרה לחלון.</span>}
+      {dirty ? <strong role="status">{saveFailed
+        ? 'השמירה נכשלה. השינויים נשארו בחלון זה ולא נשמרו בסביבה.'
+        : 'השינויים ממתינים לשמירה אוטומטית. אין לסגור את החלון לפני סיום השמירה.'}</strong>
+        : <span>{manager ? 'הטיוטה נשמרת אוטומטית למנהלים בלבד. פרסום לעובדים מתבצע בנפרד.' : 'מוצגים רק שבועות שמנהל פרסם.'} עדכונים נבדקים כל 15 שניות ובחזרה לחלון.</span>}
       {model && model.latestRevision !== model.snapshot.revision && <p role="alert">יש גרסה חדשה ממנהל אחר. ייצא את הטיוטה אם צריך וטען מחדש לפני שמירה.</p>}
       {busy && <p role="status">שומר / מעדכן…</p>}
       {error && <p role="alert" className="validation-message">{error}</p>}
@@ -158,7 +172,7 @@ export default function WorkspaceSession({ client, workspaceId, userId, onBack, 
       {manager && showSettings && <section className="workspace-settings card">
         <h2>חברים והרשאות</h2>
         <p>חבר חדש יכול לצפות בלבד. קשר אותו לרשומת עובד כדי שיוכל להגיש בקשות עבור עצמו. קידום למנהל מאפשר עריכה ואישור בקשות.</p>
-        {dirty && <p>שמור את הסידור לפני שינוי הרשאות או קישור עובדים.</p>}
+        {dirty && <p>יש להמתין לסיום השמירה לפני שינוי הרשאות או קישור עובדים.</p>}
         <div className="member-list">{model.members.map((member) => <MemberEditor key={`${member.user_id}:${member.role}:${member.worker_id}`}
           member={member} workers={model.snapshot.data.workers} disabled={busy || dirty} onSave={(role, worker) => perform(async () => {
             const result = await client.rpc('sm_update_member', { p_workspace: workspaceId, p_user: member.user_id, p_role: role, p_worker: worker })
@@ -192,7 +206,7 @@ export default function WorkspaceSession({ client, workspaceId, userId, onBack, 
               <div>
                 <strong>{model.publishedWeeks.includes(week) ? 'השבוע פורסם לעובדים' : 'השבוע עדיין לא פורסם לעובדים'}</strong>
                 <span>{manager
-                  ? dirty ? 'יש לשמור את הטיוטה לפני פרסום.' : 'הפרסום מעתיק לעובדים את השיבוץ השמור של שבוע זה בלבד.'
+                  ? dirty ? 'ניתן לפרסם לאחר סיום השמירה האוטומטית.' : 'הפרסום מעתיק לעובדים את השיבוץ השמור של שבוע זה בלבד.'
                   : 'השיבוצים יופיעו כאן לאחר שמנהל יפרסם את השבוע.'}</span>
               </div>
               {manager && <button className="button primary" disabled={dirty || busy} onClick={() => publishWeek(week)}>
